@@ -1,0 +1,31 @@
+# Add after compose.yaml and compose.vps.yaml; requires PUBLIC_HOST and bot token.
+services:
+  api:
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set server-only bot token}
+      APP_ORIGIN: https://${PUBLIC_HOST:?Set PUBLIC_HOST}:8443
+      COOKIE_SECURE: "true"
+      INIT_DATA_MAX_AGE_SECONDS: ${INIT_DATA_MAX_AGE_SECONDS:-300}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+  web:
+    ports: !override
+      - "127.0.0.1:8080:80"
+  caddy:
+    image: caddy:2-alpine
+    profiles: [app]
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST}
+    ports:
+      - "80:80"
+      - "8443:8443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+volumes:
+  caddy_data:
+  caddy_config:

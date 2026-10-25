@@ -1,0 +1,21 @@
+{
+  admin off
+  auto_https disable_redirects
+}
+
+https://{$PUBLIC_HOST}:8443 {
+  tls {
+    issuer acme {
+      disable_tlsalpn_challenge
+    }
+  }
+  reverse_proxy web:80
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy no-referrer
+  }
+}
+
+http://{$PUBLIC_HOST} {
+  redir https://{$PUBLIC_HOST}:8443{uri} permanent
+}

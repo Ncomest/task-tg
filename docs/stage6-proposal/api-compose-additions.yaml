@@ -1,0 +1,6 @@
+# Only these additions to the existing api service in compose.vps.yaml:
+init: true
+cap_drop: [ALL]
+security_opt: [no-new-privileges:true]
+stop_grace_period: 20s
+command: [sh, -c, 'npm run db:deploy -w @task-tg/api && exec node apps/api/dist/server.js']

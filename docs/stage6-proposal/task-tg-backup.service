@@ -1,0 +1,11 @@
+[Unit]
+Description=Task TG local database, source and certificate backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/task-tg
+ExecStart=/usr/bin/bash /opt/task-tg/infra/backup.sh
+UMask=0077
+TimeoutStartSec=300

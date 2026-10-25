@@ -1,0 +1,27 @@
+{
+  "name": "task-tg",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm run dev -w @task-tg/api\" \"npm run dev -w @task-tg/web\"",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test -w @task-tg/api",
+    "db:generate": "npm run db:generate -w @task-tg/api",
+    "db:migrate": "npm run db:migrate -w @task-tg/api",
+    "db:deploy": "npm run db:deploy -w @task-tg/api"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "concurrently": "^9.2.0",
+    "eslint": "^9.39.0",
+    "eslint-plugin-vue": "^10.5.0",
+    "globals": "^16.5.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vue-eslint-parser": "^10.2.0"
+  }
+}
