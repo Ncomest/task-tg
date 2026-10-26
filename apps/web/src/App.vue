@@ -18,6 +18,17 @@ async function signIn() {
   state.value = 'loading';
   message.value = 'Проверяем вход…';
   try {
+    // Fresh initData contains the current Telegram profile. Sign in with it even
+    // when a session cookie exists, otherwise a changed name is applied only
+    // after the old session expires. A used or stale grant keeps the session.
+    if (telegram.initData) {
+      try {
+        await api<MeResponse>('/auth/telegram', { initData: telegram.initData });
+      } catch {
+        // Profile refresh is best-effort; a valid session still works below.
+      }
+    }
+    // Verify that the webview actually retained the session cookie.
     let profile: MeResponse;
     try { profile = await api<MeResponse>('/me'); } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 401) throw error;
@@ -26,9 +37,7 @@ async function signIn() {
         message.value = 'Откройте приложение через кнопку меню нашего бота в Telegram.';
         return;
       }
-      await api<MeResponse>('/auth/telegram', { initData: telegram.initData });
-      // Verify that the webview actually retained the session cookie.
-      profile = await api<MeResponse>('/me');
+      throw error;
     }
     user.value = profile.user;
     state.value = 'ready';
