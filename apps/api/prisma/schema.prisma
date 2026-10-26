@@ -30,6 +30,7 @@ model User {
   assignedTasks Task[] @relation("TaskAssignee")
   createdTasks Task[] @relation("TaskCreator")
   createdIdeas Idea[]
+  createdAgentRuns AgentRun[] @relation("AgentRunCreator")
 }
 
 model Session {
@@ -66,6 +67,7 @@ model Team {
   invites     TeamInvite[]
   tasks       Task[]
   ideas       Idea[]
+  agentRuns   AgentRun[]
 }
 
 model TeamMembership {
@@ -120,6 +122,7 @@ model Task {
   assignee    User?      @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   creator     User       @relation("TaskCreator", fields: [creatorId], references: [id])
   sourceIdea  Idea?
+  agentRuns   AgentRun[]
 
   @@index([teamId, createdAt, id])
   @@index([teamId, assigneeId, status])
@@ -141,4 +144,59 @@ model Idea {
   task        Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
 
   @@index([teamId, createdAt, id])
+}
+
+enum AgentRunStatus {
+  QUEUED
+  ASSESSING
+  PLANNED
+  WORKING
+  REVIEW
+  DONE
+  FAILED
+  CANCELLED
+  NEEDS_INPUT
+}
+
+model AgentRun {
+  id               String         @id @default(uuid())
+  taskId           String
+  teamId           String
+  createdById      String
+  status           AgentRunStatus @default(QUEUED)
+  taskVersion      Int
+  taskTitle        String
+  taskDescription  String         @default("")
+  summary          String?
+  branch           String?
+  pullRequestUrl   String?
+  error            String?
+  attempts         Int            @default(0)
+  workerId         String?
+  leaseHash        String?
+  leaseExpiresAt   DateTime?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  task             Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  team             Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdBy        User           @relation("AgentRunCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  events           AgentEvent[]
+
+  @@index([taskId, createdAt])
+  @@index([teamId, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@index([createdById])
+}
+
+model AgentEvent {
+  id        String          @id @default(uuid())
+  runId     String
+  stage     AgentRunStatus?
+  message   String
+  createdAt DateTime        @default(now())
+  run       AgentRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
 }

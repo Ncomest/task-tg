@@ -80,3 +80,50 @@ export interface IdeaItem {
   createdAt: string;
   updatedAt: string;
 }
+
+export type AgentRunStatus =
+  | 'QUEUED'
+  | 'ASSESSING'
+  | 'PLANNED'
+  | 'WORKING'
+  | 'REVIEW'
+  | 'DONE'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'NEEDS_INPUT';
+
+/** Stages an agent is allowed to report while a run is in progress. */
+export type AgentRunStage = 'ASSESSING' | 'PLANNED' | 'WORKING' | 'REVIEW' | 'NEEDS_INPUT';
+
+export interface AgentEventItem {
+  id: string;
+  runId: string;
+  stage: AgentRunStatus | null;
+  message: string;
+  createdAt: string;
+}
+
+export interface AgentRunItem {
+  id: string;
+  taskId: string;
+  teamId: string;
+  createdById: string;
+  status: AgentRunStatus;
+  taskVersion: number;
+  taskTitle: string;
+  taskDescription: string;
+  summary: string | null;
+  branch: string | null;
+  pullRequestUrl: string | null;
+  error: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  events: AgentEventItem[];
+}
+
+export interface AgentRunClaim extends AgentRunItem {
+  leaseToken: string;
+  leaseExpiresAt: string;
+}

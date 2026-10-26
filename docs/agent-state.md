@@ -1,8 +1,96 @@
 # Состояние проекта
 
-Дата: 2026-10-25 (Europe/Moscow). Рабочая область: E:\Programming\Vue\task-tg.
+Дата: 2026-10-26 (Europe/Moscow). Фактический путь в текущей сессии:
+`C:\Users\ПК\task-tg`; AGENTS.md всё ещё указывает `E:\Programming\Vue\task-tg`.
 
-## Текущая граница
+## Агент-исполнитель (2026-10-26)
+
+Цель: кнопка «Отправить агенту» в редакторе выбранной задачи; локальный worker
+оценивает задачу, планирует, вносит изменения в отдельной ветке, запускает
+проверки и открывает PR без автоматического merge. Статус и этапы видны в
+менеджере задач.
+
+Подтверждённое состояние:
+- Добавлены общие типы `AgentRun*`, Prisma-модели `AgentRun`/`AgentEvent`,
+  миграция `20261026090000_agent_runs` и индексы.
+- API: создание/список/отмена запуска участником команды; worker-маршруты
+  claim/heartbeat/complete защищены `AGENT_WORKER_TOKEN`; `/events` защищён
+  per-run lease; lease 180 с; истёкшие запуски переходят в `FAILED`
+  с `LEASE_EXPIRED`; задача переходит в `IN_PROGRESS` при создании запуска.
+  Worker-операции и отмена сериализуются блокировкой строки Team, а reaper
+  обновляет только всё ещё истёкший активный запуск, поэтому поздний
+  heartbeat/report/complete не перезаписывает отмену.
+- UI: панель агента в редакторе задачи, отправка, подтверждаемая отмена,
+  статус, summary/error, ветка/PR, журнал этапов, история, опрос активного
+  запуска каждые 4 секунды.
+- Worker `scripts/agent-worker.mjs`: worktree, `npm ci`/`db:generate`,
+  OpenCode CLI с агентом `task-agent`, heartbeat с начала работы, отчёты
+  этапов через `scripts/agent-report.mjs`, проверки в очищенном окружении,
+  скан защищённых файлов и секретов, коммит, push/PR, без merge.
+- Агент `task-agent` ограничен: чтение/правка worktree, разрешённые
+  `npm`/`npm.cmd`/`git`/helper; запрещены сеть, subagents, skills, `.env`,
+  `.git`, `package.json`, lockfile и generated Prisma.
+- Документация: README, docs/acceptance.md и этот файл.
+
+Проверки:
+- `npm run lint`, `npm run typecheck`, `npm test` — PASS; 14 unit-тестов.
+- `npm run build` — PASS (финальные исходники).
+- `test:integration` на отдельной `task_tg_auth_test` — PASS:
+  auth/teams/tasks/ideas с новой миграцией.
+- `test:agent-integration` на отдельной `task_tg_agent_test` — PASS:
+  создание, изоляция, claim/lease, heartbeat, этапы, завершение, отмена,
+  поздние heartbeat/complete/report после отмены, истечение аренды, каскад.
+- Worker smoke с фиктивным OpenCode — PASS: этапы, проверки, коммит ветки,
+  `DONE` без push/PR.
+- Worker smoke с настоящим OpenCode CLI и моделью
+  `opencode/deepseek-v4.1-flash-free` — PASS: `task-agent` создал файл,
+  отчитался об этапах, выполнил `npm.cmd test`; worker выполнил проверки и
+  закоммитил ветку. Ранее `opencode/flint-40b-free` вернул upstream error —
+  внешняя проблема модели, не кода.
+- Worker на реальном репозитории, `AGENT_INSTALL=true`, база
+  `feature/agent-runs` — установка зависимостей и `db:generate` PASS; агент
+  создал `docs/agent-smoke.md`; worker выполнил test/lint/typecheck/build и
+  коммит. OpenCode завершился с кодом 1 из-за временных `ECONNRESET` от
+  провайдера, поэтому запуск помечен `FAILED`, хотя проверки прошли. Ветка и
+  коммит проверены и удалены; push/PR не выполнялись.
+- GitHub-авторизация проверена через `git ls-remote` с токеном `gh`.
+
+Решения:
+- Worker локальный, опрашивает API; OpenCode CLI установлен на этом ПК.
+- Отдельный git worktree на запуск; база `AGENT_BASE_BRANCH`, ветка
+  `agent/<run>-<task>`; задача остаётся `IN_PROGRESS` после PR до проверки.
+- Этапы: `QUEUED → ASSESSING → PLANNED → WORKING → REVIEW → DONE`;
+  также `FAILED`, `CANCELLED`, `NEEDS_INPUT`.
+- `AGENT_WORKER_TOKEN` нужен для claim/heartbeat/complete; для `/events`
+  достаточно lease. Без серверного токена создание запуска возвращает 503.
+- Проверки worker-а и `npm ci`/`db:generate` выполняются без production-секретов;
+  это снижает утечку, но не является жёсткой песочницей.
+- Автоматического merge нет.
+
+НЕ ЗАПУЩЕНО / блокеры:
+- Реальный `git push` и `gh pr create` в worker-прогоне не выполнялись:
+  smoke-тесты шли с `AGENT_PUSH=false`/`AGENT_PR=false`. Нужен отдельный
+  прогон на feature-ветке после коммита.
+- Production API, `.env` VPS и Telegram UI агента не проверены; production
+  `AGENT_WORKER_TOKEN` не задан. Деплой только после явного согласования.
+- Worker не является песочницей: тесты/сборка агента выполняются локально
+  и потенциально имеют доступ к файлам/сети. Остаточный prompt-injection риск.
+- Feature закоммичен на ветке `feature/agent-runs`; `main` до merge не содержит
+  конфигурацию агента и helper-скрипты. Для реального прогона до merge
+  указывать `AGENT_BASE_BRANCH=feature/agent-runs`.
+
+Следующий шаг:
+1. Финальные проверки выполнены; временные smoke-файлы удалены.
+2. Feature закоммичен на `feature/agent-runs`, без merge/deploy.
+3. Реальный прогон с `AGENT_INSTALL=true` и базой `feature/agent-runs`
+   выполнен; install, агент и проверки прошли, но OpenCode завершился с
+   кодом 1 из-за временного `ECONNRESET`. Проверить push/PR отдельно на
+   тестовой ветке/репозитории с `AGENT_PUSH=true`, `AGENT_PR=true` после
+   согласования; текущий прогон был без push/PR.
+4. После согласования настроить `AGENT_WORKER_TOKEN` на production,
+   проверить Telegram UI и только затем деплоить.
+
+## Этап 6: текущая граница (2026-10-25)
 Этапы 1–5 реализованы и развёрнуты. Этап 6 начат: независимые проверки,
 восстановление БД, исправления мобильного UI и документация выполнены.
 Этап 6 ЦЕЛИКОМ НЕ ЗАВЕРШЁН: ожидается подтверждение постоянной конфигурации

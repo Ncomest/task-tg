@@ -5,13 +5,15 @@ import type { CurrentUser, HealthResponse, ReadinessResponse } from '@task-tg/sh
 import type { AuthService } from './auth/service.js';
 import { AuthError } from './auth/telegram.js';
 import { HttpError } from './errors.js';
+import type { AgentService } from './agent/service.js';
+import { registerAgentRoutes } from './agent/routes.js';
 import { registerTeamRoutes } from './teams/routes.js';
 import type { TeamService } from './teams/service.js';
 import { registerIdeaRoutes, registerWorkRoutes } from './work/routes.js';
 import type { WorkService } from './work/service.js';
 
 declare module 'fastify' {
-  interface FastifyContextConfig { public?: boolean }
+  interface FastifyContextConfig { public?: boolean; agent?: boolean }
   interface FastifyRequest { currentUser: CurrentUser | null }
 }
 
@@ -25,6 +27,8 @@ interface Dependencies {
   sessionTtlSeconds?: number;
   teams?: TeamService;
   work?: WorkService;
+  agent?: AgentService;
+  agentWorkerToken?: string;
 }
 
 export async function buildApp(dependencies: Dependencies) {
@@ -49,6 +53,9 @@ export async function buildApp(dependencies: Dependencies) {
   app.addHook('onRequest', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     reply.header('X-Content-Type-Options', 'nosniff');
+    // Worker endpoints authenticate with a bearer token and are called server-to-server,
+    // so they have neither a Telegram session cookie nor a browser Origin header.
+    if (request.routeOptions.config.agent) return;
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && request.headers.origin !== (dependencies.appOrigin ?? 'http://localhost:5173')) {
       throw new AuthError(403, 'ORIGIN_NOT_ALLOWED');
     }
@@ -90,6 +97,7 @@ export async function buildApp(dependencies: Dependencies) {
     registerWorkRoutes(app, dependencies.work);
     registerIdeaRoutes(app, dependencies.work);
   }
+  if (dependencies.agent) registerAgentRoutes(app, dependencies.agent, dependencies.agentWorkerToken);
   return app;
 }
 

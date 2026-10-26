@@ -12,7 +12,8 @@
     "test": "npm run test -w @task-tg/api",
     "db:generate": "npm run db:generate -w @task-tg/api",
     "db:migrate": "npm run db:migrate -w @task-tg/api",
-    "db:deploy": "npm run db:deploy -w @task-tg/api"
+    "db:deploy": "npm run db:deploy -w @task-tg/api",
+    "agent:worker": "node scripts/agent-worker.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

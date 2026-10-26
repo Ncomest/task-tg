@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-import type { TaskItem, TaskStatus, TeamDetail } from '@task-tg/shared';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import type { AgentRunItem, AgentRunStatus, TaskItem, TaskStatus, TeamDetail } from '@task-tg/shared';
 import { api, ApiError } from '../api';
 const props = defineProps<{ team: TeamDetail }>();
 const emit = defineEmits<{ 'session-expired': []; 'access-lost': [] }>();
@@ -24,8 +24,27 @@ const description = ref('');
 const status = ref<TaskStatus>('TODO');
 const assigneeId = ref('');
 const deleting = ref(false);
+const agentRuns = ref<AgentRunItem[]>([]);
+const agentBusy = ref(false);
+const agentPollBusy = ref(false);
+const agentError = ref('');
+const agentNotice = ref('');
+const cancelingRunId = ref('');
+let agentTimer: number | undefined;
 const labels: Record<TaskStatus, string> = { TODO: 'К выполнению', IN_PROGRESS: 'В работе', DONE: 'Готово' };
+const agentStatusLabels: Record<AgentRunStatus, string> = {
+  QUEUED: 'В очереди', ASSESSING: 'Оценка', PLANNED: 'План готов', WORKING: 'В работе',
+  REVIEW: 'Проверка', DONE: 'Готово', FAILED: 'Ошибка', CANCELLED: 'Отменено', NEEDS_INPUT: 'Нужно уточнение',
+};
+const activeAgentStatuses: AgentRunStatus[] = ['QUEUED', 'ASSESSING', 'PLANNED', 'WORKING', 'REVIEW'];
 const columns = computed(() => (Object.keys(labels) as TaskStatus[]).filter(value => !statusFilter.value || value === statusFilter.value));
+const agentActive = computed(() => agentRuns.value.some(run => activeAgentStatuses.includes(run.status)));
+const latestAgentRun = computed(() => agentRuns.value[0] ?? null);
+const hasChanges = computed(() => {
+  const task = editing.value;
+  if (!task) return false;
+  return title.value.trim() !== task.title || description.value.trim() !== task.description || status.value !== task.status || (assigneeId.value || null) !== task.assigneeId;
+});
 const base = `/teams/${props.team.id}/tasks`;
 function fail(cause: unknown) {
   if (cause instanceof ApiError && cause.status === 401) { emit('session-expired'); return; }
@@ -39,6 +58,50 @@ function fail(cause: unknown) {
     VERSION_CONFLICT: 'Задача изменилась. Ваш ввод сохранён. Сначала загрузите актуальную версию.',
   };
   error.value = cause instanceof ApiError ? messages[cause.code] ?? 'Ошибка сервера. Повторите действие.' : 'Нет соединения с сервером. Ваш ввод сохранён. Повторите действие.';
+}
+function agentFail(cause: unknown) {
+  if (cause instanceof ApiError && cause.status === 401) { emit('session-expired'); return; }
+  if (cause instanceof ApiError && cause.code === 'TEAM_NOT_FOUND') emit('access-lost');
+  const messages: Record<string, string> = {
+    AGENT_RUN_ACTIVE: 'Агент уже работает над этой задачей. Дождитесь завершения или отмените запуск.',
+    AGENT_RUN_FINISHED: 'Этот запуск уже завершён. Обновите карточку задачи.',
+    AGENT_RUN_NOT_FOUND: 'Запуск агента не найден. Обновите карточку задачи.',
+    AGENT_NOT_CONFIGURED: 'Агент не настроен на сервере. Обратитесь к администратору.',
+    AGENT_LEASE_EXPIRED: 'Сеанс агента истёк. Отправьте задачу ещё раз.',
+    AGENT_STAGE_INVALID: 'Агент прислал этап в неверном порядке. Обновите карточку.',
+    VERSION_CONFLICT: 'Задача изменилась. Сначала загрузите актуальную версию.',
+    TEAM_NOT_FOUND: 'Доступ к команде закрыт.',
+    TOO_MANY_REQUESTS: 'Слишком много запросов. Подождите минуту.',
+  };
+  agentError.value = cause instanceof ApiError ? messages[cause.code] ?? 'Не удалось выполнить действие агента. Повторите попытку.' : 'Нет соединения с сервером. Повторите попытку.';
+}
+function stopAgentPolling() {
+  if (agentTimer !== undefined) { window.clearInterval(agentTimer); agentTimer = undefined; }
+}
+function ensureAgentPolling() {
+  if (!agentActive.value) { stopAgentPolling(); return; }
+  if (agentTimer !== undefined) return;
+  agentTimer = window.setInterval(() => {
+    if (editing.value) void loadAgentRuns(editing.value.id, true);
+  }, 4000);
+}
+async function loadAgentRuns(taskId: string, polling = false) {
+  if (polling && agentPollBusy.value) return;
+  if (polling) agentPollBusy.value = true;
+  try {
+    const result = await api<{ runs: AgentRunItem[] }>(`${base}/${taskId}/agent-runs`);
+    if (!editing.value || editing.value.id !== taskId) return;
+    agentRuns.value = result.runs;
+    ensureAgentPolling();
+  } catch (cause) {
+    if (!polling) agentFail(cause);
+    else stopAgentPolling();
+  } finally {
+    if (polling) agentPollBusy.value = false;
+  }
+}
+function formattedDate(value: string) {
+  return new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 async function load(more = false) {
   if (busy.value) return;
@@ -63,10 +126,13 @@ async function refreshMembers() {
   catch (cause) { fail(cause); }
 }
 function open(task: TaskItem | null) {
+  stopAgentPolling();
   editing.value = task; latest.value = null; conflicted.value = false; deleting.value = false;
+  agentRuns.value = []; agentError.value = ''; agentNotice.value = ''; cancelingRunId.value = '';
   title.value = task?.title ?? ''; description.value = task?.description ?? '';
   status.value = task?.status ?? 'TODO'; assigneeId.value = task?.assigneeId ?? '';
   error.value = ''; notice.value = ''; sheet.value?.showModal();
+  if (task) void loadAgentRuns(task.id);
   void refreshMembers();
 }
 async function fetchLatest() {
@@ -100,7 +166,48 @@ async function save(remove = false) {
   } finally { busy.value = false; }
   await load();
 }
+async function sendToAgent() {
+  const task = editing.value;
+  if (!task || busy.value || agentBusy.value || agentActive.value || conflicted.value) return;
+  if (hasChanges.value) { agentError.value = 'Сначала сохраните изменения задачи, чтобы отправить её агенту.'; return; }
+  agentBusy.value = true; agentError.value = ''; agentNotice.value = '';
+  try {
+    const result = await api<{ run: AgentRunItem; task: TaskItem }>(`${base}/${task.id}/agent-runs`, { version: task.version });
+    editing.value = result.task;
+    title.value = result.task.title; description.value = result.task.description;
+    status.value = result.task.status; assigneeId.value = result.task.assigneeId ?? '';
+    agentRuns.value = [result.run, ...agentRuns.value.filter(run => run.id !== result.run.id)];
+    agentNotice.value = 'Задача отправлена агенту. Этапы будут появляться здесь.';
+    ensureAgentPolling();
+    void load();
+  } catch (cause) {
+    agentFail(cause);
+  } finally {
+    agentBusy.value = false;
+  }
+}
+async function cancelAgentRun(run: AgentRunItem) {
+  if (agentBusy.value) return;
+  if (cancelingRunId.value !== run.id) {
+    cancelingRunId.value = run.id;
+    agentNotice.value = 'Нажмите «Подтвердить отмену», чтобы остановить агента.';
+    return;
+  }
+  agentBusy.value = true; agentError.value = '';
+  try {
+    const result = await api<{ run: AgentRunItem }>(`${base}/${run.taskId}/agent-runs/${run.id}/cancel`, {}, 'POST');
+    agentRuns.value = agentRuns.value.map(item => item.id === result.run.id ? result.run : item);
+    cancelingRunId.value = '';
+    agentNotice.value = 'Запуск агента отменён.';
+    stopAgentPolling();
+  } catch (cause) {
+    agentFail(cause);
+  } finally {
+    agentBusy.value = false;
+  }
+}
 onMounted(() => load());
+onUnmounted(stopAgentPolling);
 defineExpose({ refresh: () => {
   if (busy.value) refreshPending.value = true;
   else void load();
@@ -209,6 +316,7 @@ defineExpose({ refresh: () => {
       class="sheet"
       aria-labelledby="task-editor-title"
       @cancel.prevent="!busy && sheet?.close()"
+      @close="stopAgentPolling"
     >
       <form @submit.prevent="save()">
         <div class="section-header">
@@ -332,6 +440,130 @@ defineExpose({ refresh: () => {
           {{ busy ? 'Сохраняем…' : 'Сохранить' }}
         </button>
         <template v-if="editing">
+          <section
+            class="agent-panel"
+            aria-labelledby="task-agent-title"
+          >
+            <div class="section-header">
+              <h3 id="task-agent-title">
+                Агент
+              </h3>
+              <span
+                v-if="latestAgentRun"
+                class="agent-status"
+                :class="latestAgentRun.status.toLowerCase()"
+              >{{ agentStatusLabels[latestAgentRun.status] }}</span>
+            </div>
+            <p class="muted">
+              Агент оценит задачу, составит план, внесёт изменения в отдельной ветке и откроет pull request. Автоматического слияния нет.
+            </p>
+            <p
+              v-if="agentError"
+              class="feedback error"
+              role="alert"
+            >
+              {{ agentError }}
+            </p>
+            <p
+              v-if="agentNotice"
+              class="feedback"
+              role="status"
+            >
+              {{ agentNotice }}
+            </p>
+            <p
+              v-if="hasChanges"
+              class="muted"
+            >
+              Сначала сохраните изменения задачи, чтобы отправить её агенту.
+            </p>
+            <button
+              type="button"
+              class="secondary full-width agent-send"
+              :disabled="agentBusy || busy || agentActive || conflicted || hasChanges"
+              @click="sendToAgent"
+            >
+              {{ agentBusy ? 'Отправляем…' : agentActive ? (latestAgentRun?.status === 'REVIEW' ? 'Pull request на проверке' : 'Агент работает…') : latestAgentRun ? 'Отправить агенту снова' : 'Отправить агенту' }}
+            </button>
+            <template v-if="latestAgentRun">
+              <div class="agent-run-head">
+                <strong>{{ latestAgentRun.taskTitle }}</strong>
+                <small class="muted">{{ formattedDate(latestAgentRun.createdAt) }}</small>
+              </div>
+              <p
+                v-if="latestAgentRun.summary"
+                class="agent-summary"
+              >
+                {{ latestAgentRun.summary }}
+              </p>
+              <p
+                v-if="latestAgentRun.error"
+                class="feedback error"
+              >
+                {{ latestAgentRun.error }}
+              </p>
+              <p v-if="latestAgentRun.branch">
+                Ветка: <code>{{ latestAgentRun.branch }}</code>
+              </p>
+              <p v-if="latestAgentRun.pullRequestUrl">
+                <a
+                  :href="latestAgentRun.pullRequestUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >Открыть pull request</a>
+              </p>
+              <ol class="agent-timeline">
+                <li
+                  v-for="event in latestAgentRun.events"
+                  :key="event.id"
+                >
+                  <span class="agent-event-stage">{{ event.stage ? agentStatusLabels[event.stage] : 'Сообщение' }}</span>
+                  <span class="agent-event-message">{{ event.message }}</span>
+                  <small class="muted">{{ formattedDate(event.createdAt) }}</small>
+                </li>
+              </ol>
+              <div
+                v-if="agentActive"
+                class="dialog-actions"
+              >
+                <button
+                  type="button"
+                  class="text-button danger-text"
+                  :disabled="agentBusy"
+                  @click="cancelAgentRun(latestAgentRun)"
+                >
+                  {{ cancelingRunId === latestAgentRun.id ? 'Подтвердить отмену' : 'Отменить запуск' }}
+                </button>
+              </div>
+              <details
+                v-if="agentRuns.length > 1"
+                class="agent-history"
+              >
+                <summary>История запусков</summary>
+                <ul>
+                  <li
+                    v-for="run in agentRuns.slice(1)"
+                    :key="run.id"
+                  >
+                    <span>{{ agentStatusLabels[run.status] }}</span>
+                    <span class="muted">{{ formattedDate(run.createdAt) }}</span>
+                    <a
+                      v-if="run.pullRequestUrl"
+                      :href="run.pullRequestUrl"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >PR</a>
+                  </li>
+                </ul>
+              </details>
+            </template>
+            <p
+              v-else
+              class="muted"
+            >
+              Агент ещё не запускался.
+            </p>
+          </section>
           <button
             v-if="!deleting"
             type="button"

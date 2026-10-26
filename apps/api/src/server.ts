@@ -3,6 +3,7 @@ import { db } from './db.js';
 import { env } from './env.js';
 import { createAuthService } from './auth/service.js';
 import { createPrismaAuthStore } from './auth/store.js';
+import { createAgentService } from './agent/service.js';
 import { createTeamService } from './teams/service.js';
 import { createWorkService } from './work/service.js';
 
@@ -15,6 +16,8 @@ const app = await buildApp({
   sessionTtlSeconds: env.SESSION_TTL_SECONDS,
   teams: createTeamService(db),
   work: createWorkService(db),
+  agent: createAgentService(db),
+  ...(env.AGENT_WORKER_TOKEN ? { agentWorkerToken: env.AGENT_WORKER_TOKEN } : {}),
   auth: createAuthService(createPrismaAuthStore(db), { botToken: env.TELEGRAM_BOT_TOKEN, initDataMaxAgeSeconds: env.INIT_DATA_MAX_AGE_SECONDS, sessionTtlSeconds: env.SESSION_TTL_SECONDS }),
 });
 

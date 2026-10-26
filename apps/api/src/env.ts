@@ -14,6 +14,7 @@ export const env = z.object({
   COOKIE_SECURE: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
   INIT_DATA_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(86400).default(300),
   SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(2592000).default(604800),
+  AGENT_WORKER_TOKEN: z.preprocess((value) => value === '' ? undefined : value, z.string().min(32).max(512).optional()),
 }).parse(process.env);
 
 if (env.COOKIE_SECURE && !env.APP_ORIGIN.startsWith('https://')) throw new Error('Secure cookies require HTTPS APP_ORIGIN');

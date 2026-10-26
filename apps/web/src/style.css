@@ -80,3 +80,23 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .ideas-panel form > .secondary { margin-top: 12px; }
 .idea-list { display: grid; gap: 12px; margin-top: 20px; }
 .idea-list .task-card { margin-bottom: 0; }
+.agent-panel { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--tg-theme-section-separator-color, #53627c); }
+.agent-panel .section-header { margin-bottom: 8px; }
+.agent-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 700; background: var(--tg-theme-secondary-bg-color, #23314b); color: var(--tg-theme-hint-color, #b6c5de); }
+.agent-status.queued, .agent-status.assessing, .agent-status.planned, .agent-status.working { color: var(--tg-theme-link-color, #9cb6ff); }
+.agent-status.review { color: #f0c674; }
+.agent-status.done { color: #8ed6a2; }
+.agent-status.failed, .agent-status.cancelled { color: var(--tg-theme-destructive-text-color, #f2aaaa); }
+.agent-status.needs_input { color: #f0c674; }
+.agent-send { margin-top: 16px; }
+.agent-run-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-top: 20px; }
+.agent-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-timeline { list-style: none; display: grid; gap: 12px; max-height: 320px; overflow-y: auto; margin: 16px 0 0; padding: 0 4px 0 0; }
+.agent-timeline li { display: grid; gap: 4px; padding-left: 12px; border-left: 2px solid var(--tg-theme-section-separator-color, #53627c); }
+.agent-event-stage { font-size: 12px; font-weight: 700; color: var(--tg-theme-link-color, #9cb6ff); }
+.agent-event-message { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.agent-history { margin-top: 18px; }
+.agent-history summary { cursor: pointer; color: var(--tg-theme-link-color, #9cb6ff); font-size: 14px; }
+.agent-history ul { list-style: none; display: grid; gap: 8px; margin: 12px 0 0; padding: 0; }
+.agent-history li { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+code { padding: 2px 6px; border-radius: 6px; background: var(--tg-theme-bg-color, #101827); font-family: ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; }

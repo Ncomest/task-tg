@@ -8,3 +8,5 @@ coverage/
 *.log
 task-tg-deploy.tar.gz
 .backups/
+.agent-worker.env
+.agent-worktrees/
