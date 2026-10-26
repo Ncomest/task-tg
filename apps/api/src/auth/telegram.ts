@@ -5,8 +5,8 @@ import { HttpError } from '../errors.js';
 const telegramUserSchema = z.object({
   id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   first_name: z.string().min(1).max(256),
-  last_name: z.string().max(256).optional(),
-  username: z.string().max(64).optional(),
+  last_name: z.string().max(256).nullish(),
+  username: z.string().max(64).nullish(),
   is_bot: z.literal(false).optional(),
 });
 

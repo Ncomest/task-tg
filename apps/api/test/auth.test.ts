@@ -66,6 +66,14 @@ test('HMAC rejects tampering, duplicate fields, malformed user, stale and future
   assert.throws(() => validateInitData(signedData(), 'wrong-token', now, 300));
 });
 
+test('optional profile fields may be absent or null', () => {
+  const raw = signedData({ user: JSON.stringify({ id: 4503599627370495, first_name: 'Тест', last_name: null, username: null }) });
+  const user = validateInitData(raw, botToken, now, 300).user;
+  assert.equal(user.first_name, 'Тест');
+  assert.equal(user.last_name, null);
+  assert.equal(user.username, null);
+});
+
 test('session is opaque, hashed in storage, protected in cookie and revoked on logout', async () => {
   const { app, login, writes } = await fixture();
   try {

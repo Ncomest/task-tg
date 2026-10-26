@@ -14,7 +14,7 @@ export function createPrismaAuthStore(db: PrismaClient): AuthStore {
           await transaction.usedInitData.deleteMany({ where: { expiresAt: { lte: input.now } } });
           await transaction.session.deleteMany({ where: { expiresAt: { lte: input.now } } });
           await transaction.usedInitData.create({ data: { hash: input.grantHash, expiresAt: input.grantExpiresAt } });
-          const profile = { firstName: input.user.first_name, lastName: input.user.last_name ?? null, username: input.user.username ?? null };
+          const profile = { firstName: input.user.first_name, lastName: input.user.last_name || null, username: input.user.username || null };
           const user = await transaction.user.upsert({
             where: { telegramId: BigInt(input.user.id) },
             create: { telegramId: BigInt(input.user.id), ...profile },
