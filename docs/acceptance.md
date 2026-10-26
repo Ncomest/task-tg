@@ -4,7 +4,10 @@
 
 ## Автоматически и на стенде проверено
 
-- lint/typecheck/build — PASS; 14 unit-тестов — PASS.
+- lint/typecheck/build — PASS; 18 unit-тестов — PASS.
+- Уведомления о новых задачах: формат сообщения, получатели, изоляция автора,
+  ошибки доставки и best-effort создание задачи — unit-тесты PASS. Реальная
+  доставка в Telegram — НЕ ЗАПУЩЕНО (нужен бот и получатели, начавшие с ним чат).
 - npm audit и npm audit --omit=dev — 0 известных уязвимостей на дату проверки.
 - PostgreSQL integration auth/teams/tasks/ideas в отдельной task_tg_auth_test — PASS.
 - Восстановление свежего production-дампа в новую task_tg_restore_test — PASS:

@@ -95,12 +95,12 @@ export function createWorkService(db: PrismaClient) {
         const idea = await findIdea(tx, teamId, id);
         if (idea.convertedAt) {
           if (!idea.taskId) throw new HttpError(409, 'CONVERTED_TASK_DELETED');
-          return { idea: ideaItem(idea), task: taskItem(await findTask(tx, teamId, idea.taskId)) };
+          return { idea: ideaItem(idea), task: taskItem(await findTask(tx, teamId, idea.taskId)), created: false };
         }
         if (idea.version !== version) throw conflict();
         const task = await tx.task.create({ data: { teamId, creatorId: userId, title: idea.title, description: idea.description } });
         const updated = await tx.idea.update({ where: { id }, data: { taskId: task.id, convertedAt: new Date(), version: { increment: 1 } } });
-        return { idea: ideaItem(updated), task: taskItem(task) };
+        return { idea: ideaItem(updated), task: taskItem(task), created: true };
       });
     },
   };

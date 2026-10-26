@@ -7,6 +7,7 @@ import { AuthError } from './auth/telegram.js';
 import { HttpError } from './errors.js';
 import type { AgentService } from './agent/service.js';
 import { registerAgentRoutes } from './agent/routes.js';
+import type { TaskNotifier } from './notifications/tasks.js';
 import { registerTeamRoutes } from './teams/routes.js';
 import type { TeamService } from './teams/service.js';
 import { registerIdeaRoutes, registerWorkRoutes } from './work/routes.js';
@@ -27,6 +28,7 @@ interface Dependencies {
   sessionTtlSeconds?: number;
   teams?: TeamService;
   work?: WorkService;
+  taskNotifier?: TaskNotifier;
   agent?: AgentService;
   agentWorkerToken?: string;
 }
@@ -94,8 +96,8 @@ export async function buildApp(dependencies: Dependencies) {
   app.addHook('onClose', async () => dependencies.closeDatabase());
   if (dependencies.teams) registerTeamRoutes(app, dependencies.teams);
   if (dependencies.work) {
-    registerWorkRoutes(app, dependencies.work);
-    registerIdeaRoutes(app, dependencies.work);
+    registerWorkRoutes(app, dependencies.work, dependencies.taskNotifier);
+    registerIdeaRoutes(app, dependencies.work, dependencies.taskNotifier);
   }
   if (dependencies.agent) registerAgentRoutes(app, dependencies.agent, dependencies.agentWorkerToken);
   return app;

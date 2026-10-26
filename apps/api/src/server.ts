@@ -4,8 +4,14 @@ import { env } from './env.js';
 import { createAuthService } from './auth/service.js';
 import { createPrismaAuthStore } from './auth/store.js';
 import { createAgentService } from './agent/service.js';
+import { createTaskNotifier } from './notifications/tasks.js';
+import { createTelegramSender } from './notifications/telegram.js';
 import { createTeamService } from './teams/service.js';
 import { createWorkService } from './work/service.js';
+
+const taskNotifier = env.TELEGRAM_BOT_TOKEN
+  ? createTaskNotifier(db, createTelegramSender({ botToken: env.TELEGRAM_BOT_TOKEN }))
+  : undefined;
 
 const app = await buildApp({
   checkDatabase: async () => { await db.$queryRaw`SELECT 1`; },
@@ -16,6 +22,7 @@ const app = await buildApp({
   sessionTtlSeconds: env.SESSION_TTL_SECONDS,
   teams: createTeamService(db),
   work: createWorkService(db),
+  ...(taskNotifier ? { taskNotifier } : {}),
   agent: createAgentService(db),
   ...(env.AGENT_WORKER_TOKEN ? { agentWorkerToken: env.AGENT_WORKER_TOKEN } : {}),
   auth: createAuthService(createPrismaAuthStore(db), { botToken: env.TELEGRAM_BOT_TOKEN, initDataMaxAgeSeconds: env.INIT_DATA_MAX_AGE_SECONDS, sessionTtlSeconds: env.SESSION_TTL_SECONDS }),
