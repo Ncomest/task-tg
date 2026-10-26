@@ -36,20 +36,25 @@ try {
   const base = `/api/teams/${teamId}/tasks`;
   assert.equal((await app.inject(base)).statusCode, 401);
   assert.equal((await request(owner, 'POST', base, { title: ' ' })).statusCode, 400);
-  assert.equal((await request(owner, 'POST', base, { title: 'a', assigneeId: outsider.id })).statusCode, 400);
+  assert.equal((await request(owner, 'POST', base, { title: 'No project' })).statusCode, 400);
+  assert.equal((await request(owner, 'POST', base, { title: 'Bad project', project: 'UNKNOWN' })).statusCode, 400);
+  assert.equal((await request(owner, 'POST', base, { title: 'a', project: 'TG_BUDGET', assigneeId: outsider.id })).statusCode, 400);
   assert.equal((await request(owner, 'PATCH', `${base}/${randomUUID()}`, { version: 1 })).statusCode, 400);
   assert.equal((await request(owner, 'GET', `${base}?status=bad`)).statusCode, 400);
   assert.equal((await app.inject({ method: 'POST', url: base, headers: { origin: 'https://evil.example', cookie: 'tasktg_dev=' + '0'.repeat(43) }, payload: { title: 'x' } })).statusCode, 403);
-  const created = await request(member, 'POST', base, { title: ' Search target ', description: 'Details', assigneeId: member.id });
+  const created = await request(member, 'POST', base, { title: ' Search target ', description: 'Details', project: 'TG_BUDGET', assigneeId: member.id });
   assert.equal(created.statusCode, 201);
   let task = created.json().task as TaskItem;
   assert.equal(task.title, 'Search target');
+  assert.equal(task.project, 'TG_BUDGET');
   for (const actor of [owner, admin, member]) {
     assert.equal((await request(actor, 'GET', `${base}/${task.id}`)).statusCode, 200);
     const changed = await request(actor, 'PATCH', `${base}/${task.id}`, { version: task.version, description: actor.firstName });
     assert.equal(changed.statusCode, 200); task = changed.json().task as TaskItem;
   }
-  for (const [method, suffix, body] of [ ['GET', '', undefined], ['GET', `/${task.id}`, undefined], ['POST', '', { title: 'hack' }], ['PATCH', `/${task.id}`, { version: task.version, title: 'hack' }], ['DELETE', `/${task.id}`, { version: task.version }] ] as const) {
+  const reprojected = await request(owner, 'PATCH', `${base}/${task.id}`, { version: task.version, project: 'TASK_TG' });
+  assert.equal(reprojected.statusCode, 200); assert.equal(reprojected.json().task.project, 'TASK_TG'); task = reprojected.json().task as TaskItem;
+  for (const [method, suffix, body] of [ ['GET', '', undefined], ['GET', `/${task.id}`, undefined], ['POST', '', { title: 'hack', project: 'TG_BUDGET' }], ['PATCH', `/${task.id}`, { version: task.version, title: 'hack' }], ['DELETE', `/${task.id}`, { version: task.version }] ] as const) {
     assert.equal((await request(outsider, method, base + suffix, body)).statusCode, 404);
   }
   assert.equal((await request(outsider, 'GET', `/api/teams/${foreignId}/tasks/${task.id}`)).statusCode, 404);
@@ -93,7 +98,7 @@ try {
   for (const role of ['ADMIN', 'MEMBER'] as const) {
     await teams.join(admin.id, (await teams.createInvite(teamId, owner.id)).token);
     if (role === 'ADMIN') await teams.changeRole(teamId, owner.id, admin.id, role);
-    const item = await work.createTask(teamId, owner.id, { title: 'Delete policy', description: '', status: 'TODO', assigneeId: null });
+    const item = await work.createTask(teamId, owner.id, { title: 'Delete policy', description: '', status: 'TODO', project: 'TASK_TG', assigneeId: null });
     assert.equal((await request(admin, 'DELETE', `${base}/${item.id}`, { version: item.version })).statusCode, 204);
     await teams.leave(teamId, admin.id);
   }

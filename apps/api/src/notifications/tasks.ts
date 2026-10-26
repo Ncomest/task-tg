@@ -1,4 +1,4 @@
-import type { TaskItem } from '@task-tg/shared';
+import type { Project, TaskItem } from '@task-tg/shared';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import type { TelegramSender } from './telegram.js';
 
@@ -24,9 +24,15 @@ export interface NewTaskMessageInput {
   teamName: string;
   title: string;
   description: string;
+  project: Project | null;
   authorName: string;
   assigneeName: string | null;
 }
+
+const projectLabels: Record<Project, string> = {
+  TG_BUDGET: 'tg-budget · учёт финансов',
+  TASK_TG: 'task-tg · таск-менеджер',
+};
 
 function displayName(user: NotificationUser | undefined) {
   if (!user) return 'Участник';
@@ -42,6 +48,7 @@ export function formatNewTaskMessage(input: NewTaskMessageInput) {
   return [
     `🆕 Новая задача в команде «${input.teamName}»`,
     input.title,
+    ...(input.project ? [`Проект: ${projectLabels[input.project]}`] : []),
     ...(details ? ['', details] : []),
     '',
     `Автор: ${input.authorName}`,
@@ -76,6 +83,7 @@ export function createTaskNotifier(db: PrismaClient, sender: TelegramSender): Ta
         teamName: team.name,
         title: task.title,
         description: task.description,
+        project: task.project,
         authorName: displayName(author),
         assigneeName: task.assigneeId ? displayName(assignee) : null,
       });

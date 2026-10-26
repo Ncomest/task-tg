@@ -256,7 +256,18 @@ worktree и отдельной ветке. Он оценивает задачу,
 изменения, запускает проверки, коммитит результат и открывает pull request.
 Автоматического слияния нет: PR проверяет человек.
 
-Этапы запуска: `QUEUED → ASSESSING → PLANNED → WORKING → REVIEW → DONE`.
+### Проекты задач
+
+У каждой новой задачи и идеи есть проект: `TG_BUDGET` (`tg-budget`, учёт
+финансов) или `TASK_TG` (этот таск-менеджер). В интерфейсе первым и по
+умолчанию выбран `tg-budget`. Проект виден на карточках и в редакторе; от
+него зависит, в каком репозитории worker создаст worktree и PR. Старые
+записи без проекта остаются доступными для чтения, но их нужно назначить
+вручную перед отправкой агенту или преобразованием идеи в задачу.
+
+### Этапы запуска
+
+`QUEUED → ASSESSING → PLANNED → WORKING → REVIEW → DONE`.
 Возможны `FAILED`, `CANCELLED` и `NEEDS_INPUT`. При создании запуска задача
 переходит в `IN_PROGRESS` и остаётся в этом статусе после PR до проверки
 человеком. Этапы и журнал видны в редакторе задачи; активный запуск
@@ -289,11 +300,13 @@ Copy-Item scripts/agent-worker.env.example .agent-worker.env
 | --- | --- |
 | `AGENT_API_URL` | URL API, например `http://127.0.0.1:3000` |
 | `AGENT_WORKER_TOKEN` | тот же токен, что в `.env` API |
-| `AGENT_REPO_DIR` | путь к этому репозиторию |
+| `AGENT_REPO_DIR_TASK_TG` | путь к клону этого репозитория (fallback — `AGENT_REPO_DIR`) |
+| `AGENT_REPO_DIR_TG_BUDGET` | путь к клону `rozhokserega-lang/tg-budget` |
 | `AGENT_BASE_BRANCH` | база для worktree, по умолчанию `main` |
 | `AGENT_OPENCODE_BIN` | путь к `opencode-cli.exe` |
 | `AGENT_MODEL` | необязательная модель `provider/model` |
-| `AGENT_INSTALL` | `true` — выполнять `npm ci` и `db:generate` в worktree |
+| `AGENT_INSTALL` | `true` — выполнять `npm ci` и `db:generate` в worktree task-tg |
+| `AGENT_INSTALL_TG_BUDGET` | `false` — tg-budget статический, npm-установка не нужна |
 | `AGENT_PUSH` | `true` — отправлять ветку в `origin` |
 | `AGENT_PR` | `true` — создавать pull request через `gh` |
 | `AGENT_ONCE` | `true` — взять один запуск и выйти |
@@ -315,20 +328,26 @@ API, забирает `QUEUED`-запуски и обрабатывает их �
 
 ### Что выполняет worker
 
-1. Создаёт worktree от `AGENT_BASE_BRANCH` с веткой `agent/<run>-<task>`.
-2. При `AGENT_INSTALL=true` выполняет `npm ci` и `npm run db:generate` с
-   очищенным окружением без production-секретов.
-3. Запускает OpenCode с агентом `task-agent` из `.opencode/agents/task-agent.md`.
-   Агенту доступны только чтение/правка файлов worktree, разрешённые команды
-   `npm`/`git` и helper `scripts/agent-report.mjs`; сеть, subagents, skills,
-   `.env`, `.git`, `package.json` и lockfile закрыты.
-4. После агента сканирует staged-файлы на lease-токен, GitHub-токены и
-   приватные ключи, блокирует правки защищённых файлов и запускает
-   `test`, `lint`, `typecheck`, `build` в очищенном окружении.
-5. Коммитит изменения, при `AGENT_PUSH=true` отправляет ветку и при
+1. Выбирает репозиторий по `run.project`: `AGENT_REPO_DIR_TG_BUDGET` или
+   `AGENT_REPO_DIR_TASK_TG`. Запуск без проекта отклоняется worker-ом.
+2. Создаёт worktree от `AGENT_BASE_BRANCH` с веткой `agent/<run>-<task>`.
+3. Для task-tg при `AGENT_INSTALL=true` выполняет `npm ci` и
+   `npm run db:generate` с очищенным окружением без production-секретов.
+   Для tg-budget установка пропускается (`AGENT_INSTALL_TG_BUDGET=false`).
+4. Запускает OpenCode с агентом `task-agent` из `.opencode/agents/task-agent.md`.
+   Для tg-budget worker временно создаёт такой файл с разрешениями только на
+   `node`/read-only `git` и удаляет его до коммита. Агенту доступны только
+   чтение/правка файлов worktree, разрешённые команды проекта и helper
+   `scripts/agent-report.mjs` (в task-tg); сеть, subagents, skills, `.env`,
+   `.git`, `package.json` и lockfile закрыты.
+5. После агента сканирует staged-файлы на lease-токен, GitHub-токены и
+   приватные ключи, блокирует правки защищённых файлов и запускает проверки
+   проекта в очищенном окружении: `test/lint/typecheck/build` для task-tg,
+   `node --test`/`node --check`/`git diff --cached --check` для tg-budget.
+6. Коммитит изменения, при `AGENT_PUSH=true` отправляет ветку и при
    `AGENT_PR=true` открывает PR (черновик, если проверки не прошли или
    OpenCode завершился с ошибкой).
-6. Завершает запуск статусом `DONE`/`FAILED`, сохраняет ветку, PR и summary.
+7. Завершает запуск статусом `DONE`/`FAILED`, сохраняет ветку, PR и summary.
    Ненулевой код выхода OpenCode помечает запуск `FAILED`, даже если
    проверки прошли; ветка и PR остаются для ручного разбора.
 

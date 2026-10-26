@@ -33,6 +33,7 @@ const runItem = (run: AgentRunWithEvents): AgentRunItem => ({
   taskVersion: run.taskVersion,
   taskTitle: run.taskTitle,
   taskDescription: run.taskDescription,
+  project: run.project,
   summary: run.summary,
   branch: run.branch,
   pullRequestUrl: run.pullRequestUrl,
@@ -128,6 +129,7 @@ export function createAgentService(db: PrismaClient) {
       return withTeamMember(db, teamId, userId, async (tx) => {
         const task = await findTask(tx, teamId, taskId);
         if (task.version !== version) throw new HttpError(409, 'VERSION_CONFLICT');
+        if (!task.project) throw new HttpError(409, 'PROJECT_REQUIRED');
         const active = await tx.agentRun.findFirst({ where: { taskId, status: { in: ACTIVE_STATUSES } }, select: { id: true } });
         if (active) throw new HttpError(409, 'AGENT_RUN_ACTIVE');
         const updatedTask = task.status === 'IN_PROGRESS' ? task : await tx.task.update({ where: { id: task.id }, data: { status: 'IN_PROGRESS', version: { increment: 1 } } });
@@ -139,6 +141,7 @@ export function createAgentService(db: PrismaClient) {
             taskVersion: updatedTask.version,
             taskTitle: updatedTask.title,
             taskDescription: updatedTask.description,
+            project: updatedTask.project,
             events: { create: { stage: 'QUEUED', message: 'Задача поставлена в очередь агенту.' } },
           },
           include: { events: { orderBy: { createdAt: 'asc' } } },

@@ -55,12 +55,16 @@ export interface CreatedTeamInvite extends TeamInviteSummary {
 
 export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'DONE';
 
+/** Repository the task belongs to. The worker uses it to pick the worktree. */
+export type Project = 'TG_BUDGET' | 'TASK_TG';
+
 export interface TaskItem {
   id: string;
   teamId: string;
   title: string;
   description: string;
   status: TaskStatus;
+  project: Project | null;
   assigneeId: string | null;
   creatorId: string;
   version: number;
@@ -73,6 +77,7 @@ export interface IdeaItem {
   teamId: string;
   title: string;
   description: string;
+  project: Project | null;
   creatorId: string;
   taskId: string | null;
   convertedAt: string | null;
@@ -112,6 +117,7 @@ export interface AgentRunItem {
   taskVersion: number;
   taskTitle: string;
   taskDescription: string;
+  project: Project | null;
   summary: string | null;
   branch: string | null;
   pullRequestUrl: string | null;

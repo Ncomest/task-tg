@@ -10,12 +10,13 @@ const resource = params.extend({ id: z.uuid() });
 const title = z.string().trim().min(1).max(160);
 const description = z.string().trim().max(5000);
 const status = z.enum(['TODO', 'IN_PROGRESS', 'DONE']);
+const project = z.enum(['TG_BUDGET', 'TASK_TG']);
 const assigneeId = z.uuid().nullable();
 const version = z.number().int().positive().max(2147483646);
-const ideaBody = z.object({ title, description: description.default('') }).strict();
-const ideaPatch = z.object({ version, title: title.optional(), description: description.optional() }).strict().refine((value) => Object.keys(value).length > 1);
-const taskBody = z.object({ title, description: description.default(''), status: status.default('TODO'), assigneeId: assigneeId.default(null) }).strict();
-const taskPatch = z.object({ version, title: title.optional(), description: description.optional(), status: status.optional(), assigneeId: assigneeId.optional() }).strict().refine((value) => Object.keys(value).length > 1);
+const ideaBody = z.object({ title, description: description.default(''), project }).strict();
+const ideaPatch = z.object({ version, title: title.optional(), description: description.optional(), project: project.optional() }).strict().refine((value) => Object.keys(value).length > 1);
+const taskBody = z.object({ title, description: description.default(''), status: status.default('TODO'), project, assigneeId: assigneeId.default(null) }).strict();
+const taskPatch = z.object({ version, title: title.optional(), description: description.optional(), status: status.optional(), project: project.optional(), assigneeId: assigneeId.optional() }).strict().refine((value) => Object.keys(value).length > 1);
 const query = z.object({ q: z.string().trim().max(160).optional(), cursor: z.uuid().optional() }).strict();
 function parse<T>(schema: z.ZodType<T>, value: unknown) {
   const result = schema.safeParse(value);

@@ -35,9 +35,9 @@ try {
   for (const actor of [admin, member]) await teams.join(actor.id, (await teams.createInvite(teamId, owner.id)).token);
   await teams.changeRole(teamId, owner.id, admin.id, 'ADMIN');
   const base = `/api/teams/${teamId}/ideas`;
-  const newIdea = (title: string) => work.createIdea(teamId, owner.id, { title, description: `Description of ${title}` });
+  const newIdea = (title: string) => work.createIdea(teamId, owner.id, { title, description: `Description of ${title}`, project: 'TG_BUDGET' });
   assert.equal((await app.inject(base)).statusCode, 401);
-  for (const payload of [{ title: ' ' }, { title: 'a'.repeat(161) }, { title: 'x', description: 'x'.repeat(5001) }, { title: 'x', taskId: randomUUID() }]) {
+  for (const payload of [{ title: ' ' }, { title: 'a'.repeat(161) }, { title: 'x', description: 'x'.repeat(5001) }, { title: 'x', taskId: randomUUID() }, { title: 'No project' }, { title: 'Bad project', project: 'UNKNOWN' }]) {
     assert.equal((await request(owner, 'POST', base, payload)).statusCode, 400);
   }
   assert.equal((await request(owner, 'GET', `${base}?cursor=bad`)).statusCode, 400);
@@ -45,10 +45,11 @@ try {
   assert.equal((await request(owner, 'PATCH', `${base}/${randomUUID()}`, { version: 1 })).statusCode, 400);
   assert.equal((await app.inject({ method: 'POST', url: base, headers: { origin: 'https://evil.example', cookie: 'tasktg_dev=' + '0'.repeat(43) }, payload: { title: 'x' } })).statusCode, 403);
   for (const actor of [owner, admin, member]) {
-    const created = await request(actor, 'POST', base, { title: ' Role idea ', description: ' Shared text ' });
+    const created = await request(actor, 'POST', base, { title: ' Role idea ', description: ' Shared text ', project: 'TG_BUDGET' });
     assert.equal(created.statusCode, 201);
     let idea = created.json().idea as IdeaItem;
     assert.equal(idea.title, 'Role idea'); assert.equal(idea.description, 'Shared text');
+    assert.equal(idea.project, 'TG_BUDGET');
     assert.equal(idea.creatorId, actor.id);
     assert.equal((await request(actor, 'GET', `${base}/${idea.id}`)).statusCode, 200);
     const changed = await request(actor, 'PATCH', `${base}/${idea.id}`, { version: idea.version, title: 'Updated by role' });
@@ -58,13 +59,13 @@ try {
     assert.equal(converted.statusCode, 200);
     const task = converted.json().task as TaskItem;
     assert.equal(task.creatorId, actor.id); assert.equal(task.title, idea.title);
-    assert.equal(task.description, idea.description); assert.equal(task.status, 'TODO'); assert.equal(task.assigneeId, null);
+    assert.equal(task.description, idea.description); assert.equal(task.status, 'TODO'); assert.equal(task.project, 'TG_BUDGET'); assert.equal(task.assigneeId, null);
     assert.equal((await request(actor, 'PATCH', `${base}/${idea.id}`, { version: converted.json().idea.version, title: 'No edits' })).json().error, 'IDEA_CONVERTED');
     assert.equal((await request(actor, 'DELETE', `${base}/${idea.id}`, { version: converted.json().idea.version })).statusCode, 204);
     assert.ok(await db.task.findUnique({ where: { id: task.id } }));
   }
   const idea = await newIdea('Isolation needle');
-  for (const [method, suffix, body] of [ ['GET', '', undefined], ['GET', `/${idea.id}`, undefined], ['POST', '', { title: 'hack' }], ['PATCH', `/${idea.id}`, { version: 1, title: 'hack' }], ['DELETE', `/${idea.id}`, { version: 1 }], ['POST', `/${idea.id}/convert`, { version: 1 }] ] as const) {
+  for (const [method, suffix, body] of [ ['GET', '', undefined], ['GET', `/${idea.id}`, undefined], ['POST', '', { title: 'hack', project: 'TG_BUDGET' }], ['PATCH', `/${idea.id}`, { version: 1, title: 'hack' }], ['DELETE', `/${idea.id}`, { version: 1 }], ['POST', `/${idea.id}/convert`, { version: 1 }] ] as const) {
     assert.equal((await request(outsider, method, base + suffix, body)).statusCode, 404);
   }
   for (const [method, suffix, body] of [ ['GET', '', undefined], ['PATCH', '', { version: 1, title: 'hack' }], ['DELETE', '', { version: 1 }], ['POST', '/convert', { version: 1 }] ] as const) {
@@ -148,7 +149,7 @@ try {
   assert.equal((await request(owner, 'GET', `${base}?cursor=${cursorIdea.id}`)).json().error, 'INVALID_CURSOR');
   // Deletion races with conversion, then cascades both tables.
   const cascade = await teams.create(owner.id, { name: 'Cascade race', description: '' }); teamIds.push(cascade.id);
-  const cascadedIdea = await work.createIdea(cascade.id, owner.id, { title: 'Cascade', description: '' });
+  const cascadedIdea = await work.createIdea(cascade.id, owner.id, { title: 'Cascade', description: '', project: 'TASK_TG' });
   const cascadeRace = await Promise.allSettled([work.convertIdea(cascade.id, owner.id, cascadedIdea.id, 1), teams.remove(cascade.id, owner.id)]);
   assert.equal(cascadeRace[1]?.status, 'fulfilled');
   assert.equal(await db.idea.count({ where: { teamId: cascade.id } }), 0);

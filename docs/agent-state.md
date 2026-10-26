@@ -3,6 +3,33 @@
 Дата: 2026-10-26 (Europe/Moscow). Фактический путь в текущей сессии:
 `C:\Users\ПК\task-tg`; AGENTS.md всё ещё указывает `E:\Programming\Vue\task-tg`.
 
+## Проекты задач и маршрутизация (2026-10-26)
+
+Цель: не отправлять задачи не в тот репозиторий. У задачи и идеи появился
+`project` (`TG_BUDGET` или `TASK_TG`); в UI первым и по умолчанию выбран
+`TG_BUDGET`. Worker выбирает worktree по `run.project`; при отсутствии проекта
+запуск отклоняется. Для tg-budget временно создаётся отдельный
+`.opencode/agents/task-agent.md` с разрешениями на `node` и read-only git,
+который удаляется до коммита. Клон финансового проекта:
+`C:\Users\ПК\tg-budget`, `main` `229bcac`.
+
+Состояние:
+- Ветка `feature/task-projects`; миграция `20261026130000_task_projects` и
+  поля `Task.project`, `Idea.project`, `AgentRun.project` (nullable для старых
+  строк).
+- API требует проект при создании задачи/идеи; старые строки можно назначить
+  через PATCH. `PROJECT_REQUIRED` возвращается для отправки агенту и
+  преобразования идеи без проекта.
+- Worker: `AGENT_REPO_DIR_TASK_TG`/`AGENT_REPO_DIR_TG_BUDGET`,
+  `AGENT_INSTALL_TG_BUDGET=false`; профили проверок task-tg и tg-budget.
+- Проверки: generate, typecheck, lint, unit, build, integration
+  (`task_tg_auth_test`) и agent-integration (`task_tg_agent_test`) — PASS.
+- `tg-budget`: `node --test` — 135 PASS; `node --check src/app.js`,
+  `git diff --cached --check` — PASS (после staging).
+- Не задеплоено и не запушено. Старый worker PID 14596 всё ещё работает на
+  старом коде; не перезапускать до деплоя API/UI и назначения проекта
+  финансовой задаче `b3711249-240b-41fb-b8d0-5c0d4f2fa8a3`.
+
 ## Агент-исполнитель (2026-10-26)
 
 Цель: кнопка «Отправить агенту» в редакторе выбранной задачи; локальный worker

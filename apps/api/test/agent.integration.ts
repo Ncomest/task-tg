@@ -39,7 +39,7 @@ let teamId = '';
 try {
   teamId = (await teams.create(owner.id, { name: 'Agent integration', description: '' })).id;
   await teams.join(member.id, (await teams.createInvite(teamId, owner.id)).token);
-  let task = await work.createTask(teamId, owner.id, { title: 'Agent task', description: 'Implement it', status: 'TODO', assigneeId: null });
+  let task = await work.createTask(teamId, owner.id, { title: 'Agent task', description: 'Implement it', status: 'TODO', project: 'TASK_TG', assigneeId: null });
   const base = `/api/teams/${teamId}/tasks/${task.id}/agent-runs`;
 
   assert.equal((await app.inject(base)).statusCode, 401);
@@ -51,7 +51,9 @@ try {
   const run = created.json().run as AgentRunItem;
   task = created.json().task as TaskItem;
   assert.equal(run.status, 'QUEUED');
+  assert.equal(run.project, 'TASK_TG');
   assert.equal(task.status, 'IN_PROGRESS');
+  assert.equal(task.project, 'TASK_TG');
   assert.equal(task.version, 2);
   assert.equal((await request(owner, 'POST', base, { version: task.version })).statusCode, 409);
   assert.equal((await request(owner, 'GET', base)).json().runs[0].events[0].message, 'Задача поставлена в очередь агенту.');
@@ -109,6 +111,13 @@ try {
   const expired = await db.agentRun.findUniqueOrThrow({ where: { id: thirdRun.id } });
   assert.equal(expired.status, 'FAILED');
   assert.equal(expired.error, 'LEASE_EXPIRED');
+
+  const legacyTask = await db.task.create({ data: { teamId, creatorId: owner.id, title: 'Legacy task without project' } });
+  const legacyBase = `/api/teams/${teamId}/tasks/${legacyTask.id}/agent-runs`;
+  const legacyRun = await request(owner, 'POST', legacyBase, { version: legacyTask.version });
+  assert.equal(legacyRun.statusCode, 409);
+  assert.equal(legacyRun.json().error, 'PROJECT_REQUIRED');
+  await db.task.delete({ where: { id: legacyTask.id } });
 
   const beforeDelete = await db.agentRun.count({ where: { taskId: task.id } });
   assert.ok(beforeDelete >= 3);

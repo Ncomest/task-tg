@@ -1,12 +1,12 @@
-import type { IdeaItem, TaskItem, TaskStatus } from '@task-tg/shared';
+import type { IdeaItem, Project, TaskItem, TaskStatus } from '@task-tg/shared';
 import type { PrismaClient, Prisma, Task, Idea } from '../generated/prisma/client.js';
 import { withTeamMember } from '../teams/access.js';
 import { HttpError } from '../errors.js';
 
-interface TaskInput { title: string; description: string; status: TaskStatus; assigneeId: string | null }
-interface TaskChanges { version: number; title?: string | undefined; description?: string | undefined; status?: TaskStatus | undefined; assigneeId?: string | null | undefined }
-interface IdeaInput { title: string; description: string }
-interface IdeaChanges { version: number; title?: string | undefined; description?: string | undefined }
+interface TaskInput { title: string; description: string; status: TaskStatus; project: Project; assigneeId: string | null }
+interface TaskChanges { version: number; title?: string | undefined; description?: string | undefined; status?: TaskStatus | undefined; project?: Project | undefined; assigneeId?: string | null | undefined }
+interface IdeaInput { title: string; description: string; project: Project }
+interface IdeaChanges { version: number; title?: string | undefined; description?: string | undefined; project?: Project | undefined }
 interface Filters { q?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined; cursor?: string | undefined }
 const taskItem = (task: Task): TaskItem => ({ ...task, createdAt: task.createdAt.toISOString(), updatedAt: task.updatedAt.toISOString() });
 const ideaItem = (idea: Idea): IdeaItem => ({ ...idea, convertedAt: idea.convertedAt?.toISOString() ?? null, createdAt: idea.createdAt.toISOString(), updatedAt: idea.updatedAt.toISOString() });
@@ -55,7 +55,7 @@ export function createWorkService(db: PrismaClient) {
         const task = await findTask(tx, teamId, id);
         if (task.version !== input.version) throw conflict();
         await assignee(tx, teamId, input.assigneeId);
-        return taskItem(await tx.task.update({ where: { id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.status !== undefined ? { status: input.status } : {}), ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}), version: { increment: 1 } } }));
+        return taskItem(await tx.task.update({ where: { id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.status !== undefined ? { status: input.status } : {}), ...(input.project !== undefined ? { project: input.project } : {}), ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}), version: { increment: 1 } } }));
       });
     },
     removeTask(teamId: string, userId: string, id: string, version: number) {
@@ -80,7 +80,7 @@ export function createWorkService(db: PrismaClient) {
         const idea = await findIdea(tx, teamId, id);
         if (idea.convertedAt) throw new HttpError(409, 'IDEA_CONVERTED');
         if (idea.version !== input.version) throw conflict();
-        return ideaItem(await tx.idea.update({ where: { id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), version: { increment: 1 } } }));
+        return ideaItem(await tx.idea.update({ where: { id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.project !== undefined ? { project: input.project } : {}), version: { increment: 1 } } }));
       });
     },
     removeIdea(teamId: string, userId: string, id: string, version: number) {
@@ -98,7 +98,8 @@ export function createWorkService(db: PrismaClient) {
           return { idea: ideaItem(idea), task: taskItem(await findTask(tx, teamId, idea.taskId)), created: false };
         }
         if (idea.version !== version) throw conflict();
-        const task = await tx.task.create({ data: { teamId, creatorId: userId, title: idea.title, description: idea.description } });
+        if (!idea.project) throw new HttpError(409, 'PROJECT_REQUIRED');
+        const task = await tx.task.create({ data: { teamId, creatorId: userId, title: idea.title, description: idea.description, project: idea.project } });
         const updated = await tx.idea.update({ where: { id }, data: { taskId: task.id, convertedAt: new Date(), version: { increment: 1 } } });
         return { idea: ideaItem(updated), task: taskItem(task), created: true };
       });

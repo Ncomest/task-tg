@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import type { IdeaItem, TaskItem } from '@task-tg/shared';
+import type { IdeaItem, Project, TaskItem } from '@task-tg/shared';
 import { api, ApiError } from '../api';
+import { projectLabel, projectOptions } from '../projects';
 const props = defineProps<{ teamId: string }>();
 const emit = defineEmits<{ 'session-expired': []; 'access-lost': []; converted: [] }>();
 const ideas = ref<IdeaItem[]>([]);
@@ -18,8 +19,9 @@ const linkedTask = ref<TaskItem | null>(null);
 const conflicted = ref(false);
 const title = ref('');
 const description = ref('');
+const project = ref<Project | ''>('');
 const confirmation = ref<'delete' | 'convert' | null>(null);
-const dirty = computed(() => title.value.trim() !== editing.value?.title || description.value.trim() !== editing.value?.description);
+const dirty = computed(() => title.value.trim() !== editing.value?.title || description.value.trim() !== editing.value?.description || project.value !== (editing.value?.project ?? ''));
 const base = `/teams/${props.teamId}/ideas`;
 const statusLabels = { TODO: 'К выполнению', IN_PROGRESS: 'В работе', DONE: 'Готово' };
 function fail(cause: unknown) {
@@ -33,6 +35,7 @@ function fail(cause: unknown) {
     VERSION_CONFLICT: 'Идея изменилась. Ваш ввод сохранён. Загрузите актуальную версию для сравнения.',
     IDEA_CONVERTED: 'Идея уже преобразована в задачу. Ваш ввод сохранён. Загрузите актуальную версию.',
     CONVERTED_TASK_DELETED: 'Созданная из идеи задача удалена. Повторное преобразование не создаёт новую задачу.',
+    PROJECT_REQUIRED: 'Укажите проект идеи, чтобы преобразовать её в задачу.',
     TOO_MANY_REQUESTS: 'Слишком много запросов. Подождите минуту.',
   };
   error.value = cause instanceof ApiError ? messages[cause.code] ?? 'Ошибка сервера. Повторите действие.' : 'Нет соединения с сервером. Ваш ввод сохранён. Повторите действие.';
@@ -57,6 +60,7 @@ function open(idea: IdeaItem | null) {
   editing.value = idea; latest.value = null; linkedTask.value = null;
   conflicted.value = false; confirmation.value = null;
   title.value = idea?.title ?? ''; description.value = idea?.description ?? '';
+  project.value = idea?.project ?? (idea ? '' : 'TG_BUDGET');
   error.value = ''; notice.value = ''; sheet.value?.showModal();
 }
 async function fetchLatest() {
@@ -69,7 +73,7 @@ async function fetchLatest() {
 function acceptLatest(keepDraft: boolean) {
   if (!latest.value) return;
   editing.value = latest.value;
-  if (!keepDraft) { title.value = latest.value.title; description.value = latest.value.description; }
+  if (!keepDraft) { title.value = latest.value.title; description.value = latest.value.description; project.value = latest.value.project ?? ''; }
   latest.value = null; linkedTask.value = null; conflicted.value = false; confirmation.value = null;
   notice.value = keepDraft
     ? editing.value.convertedAt ? 'Идея уже преобразована. Ваш текст сохранён в полях для копирования.' : 'Ваш ввод сохранён. Проверьте его перед повторным сохранением.'
@@ -85,18 +89,18 @@ async function showTask() {
 async function run(action: 'save' | 'delete' | 'convert') {
   const idea = editing.value;
   if (busy.value || conflicted.value || (action !== 'save' && !idea)) return;
-  if (action === 'save' && (!title.value.trim() || idea?.convertedAt)) return;
-  if (action === 'convert' && dirty.value) return;
+  if (action === 'save' && (!title.value.trim() || !project.value || idea?.convertedAt)) return;
+  if (action === 'convert' && (!idea?.project || dirty.value)) return;
   busy.value = true; error.value = '';
   try {
     if (action === 'convert' && idea) {
       const result = await api<{ idea: IdeaItem; task: TaskItem }>(`${base}/${idea.id}/convert`, { version: idea.version });
-      editing.value = result.idea; title.value = result.idea.title; description.value = result.idea.description;
+      editing.value = result.idea; title.value = result.idea.title; description.value = result.idea.description; project.value = result.idea.project ?? '';
       linkedTask.value = result.task; confirmation.value = null;
       ideas.value = ideas.value.map(item => item.id === result.idea.id ? result.idea : item);
       notice.value = 'Идея преобразована. Задача доступна на доске.'; emit('converted');
     } else {
-      await api(idea ? `${base}/${idea.id}` : base, action === 'delete' ? { version: idea?.version } : { title: title.value.trim(), description: description.value.trim(), ...(idea ? { version: idea.version } : {}) }, action === 'delete' ? 'DELETE' : idea ? 'PATCH' : 'POST');
+      await api(idea ? `${base}/${idea.id}` : base, action === 'delete' ? { version: idea?.version } : { title: title.value.trim(), description: description.value.trim(), project: project.value, ...(idea ? { version: idea.version } : {}) }, action === 'delete' ? 'DELETE' : idea ? 'PATCH' : 'POST');
       sheet.value?.close(); notice.value = action === 'delete' ? 'Идея удалена. Связанная задача сохранена, если она существовала.' : 'Идея сохранена.';
     }
   } catch (cause) { fail(cause); return; }
@@ -167,7 +171,12 @@ onMounted(() => load());
         :disabled="busy"
         @click="open(idea)"
       >
-        <strong>{{ idea.title }}</strong><span v-if="idea.description">{{ idea.description.slice(0, 180) }}</span>
+        <strong>{{ idea.title }}</strong>
+        <small
+          class="project-badge"
+          :class="{ 'project-missing': !idea.project }"
+        >{{ projectLabel(idea.project) }}</small>
+        <span v-if="idea.description">{{ idea.description.slice(0, 180) }}</span>
         <small>{{ idea.convertedAt ? idea.taskId ? 'Преобразована в задачу' : 'Преобразована · задача удалена' : 'Идея' }}</small>
       </button>
     </div>
@@ -214,12 +223,35 @@ onMounted(() => load());
           {{ notice }}
         </p>
         <fieldset :disabled="busy">
+          <label for="idea-project">Проект</label><select
+            id="idea-project"
+            v-model="project"
+            required
+            autofocus
+            :disabled="!!editing?.convertedAt"
+          >
+            <option
+              value=""
+              disabled
+            >
+              Выберите проект
+            </option>
+            <option
+              v-for="option in projectOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+          <p class="muted">
+            При преобразовании идеи проект попадёт в созданную задачу.
+          </p>
           <label for="idea-title">Название идеи</label><input
             id="idea-title"
             v-model="title"
             maxlength="160"
             required
-            autofocus
             :readonly="!!editing?.convertedAt"
           >
           <label for="idea-description">Описание идеи</label><textarea
@@ -251,7 +283,7 @@ onMounted(() => load());
         >
           <h3>{{ linkedTask.title }}</h3><p class="task-description">
             {{ linkedTask.description }}
-          </p><p>{{ statusLabels[linkedTask.status] }}</p>
+          </p><p>{{ statusLabels[linkedTask.status] }} · {{ projectLabel(linkedTask.project) }}</p>
         </div>
         <div
           v-if="conflicted"
@@ -267,7 +299,7 @@ onMounted(() => load());
           <template v-if="latest">
             <h4>{{ latest.title }}</h4><p class="task-description">
               {{ latest.description }}
-            </p><p>{{ latest.convertedAt ? 'Уже преобразована в задачу' : 'Ещё не преобразована' }}</p><div class="dialog-actions">
+            </p><p>{{ latest.convertedAt ? 'Уже преобразована в задачу' : 'Ещё не преобразована' }} · {{ projectLabel(latest.project) }}</p><div class="dialog-actions">
               <button
                 type="button"
                 :disabled="busy"
@@ -288,13 +320,19 @@ onMounted(() => load());
         <button
           v-if="!editing?.convertedAt"
           class="full-width"
-          :disabled="busy || conflicted || !title.trim()"
+          :disabled="busy || conflicted || !title.trim() || !project"
         >
           {{ busy ? 'Сохраняем…' : 'Сохранить идею' }}
         </button>
         <template v-if="editing">
           <p
-            v-if="!editing.convertedAt && dirty"
+            v-if="!editing.convertedAt && !editing.project"
+            class="muted"
+          >
+            Укажите проект идеи и сохраните изменения, чтобы преобразовать её в задачу.
+          </p>
+          <p
+            v-else-if="!editing.convertedAt && dirty"
             class="muted"
           >
             Перед преобразованием сохраните изменения.
@@ -307,7 +345,7 @@ onMounted(() => load());
               v-if="!editing.convertedAt"
               type="button"
               class="secondary"
-              :disabled="busy || conflicted || dirty"
+              :disabled="busy || conflicted || dirty || !editing.project"
               @click="confirmation = 'convert'"
             >
               Преобразовать в задачу
@@ -334,7 +372,7 @@ onMounted(() => load());
             <p>{{ confirmation === 'convert' ? 'Создать задачу из сохранённых названия и описания? Идея останется в списке и станет доступна только для чтения.' : 'Удалить идею без возможности восстановления? Связанная задача останется.' }}</p><div class="dialog-actions">
               <button
                 type="button"
-                :disabled="busy || conflicted || (confirmation === 'convert' && dirty)"
+                :disabled="busy || conflicted || (confirmation === 'convert' && (dirty || !editing.project))"
                 @click="run(confirmation)"
               >
                 {{ confirmation === 'convert' ? 'Создать задачу' : 'Удалить' }}

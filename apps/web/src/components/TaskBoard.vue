@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import type { AgentRunItem, AgentRunStatus, TaskItem, TaskStatus, TeamDetail } from '@task-tg/shared';
+import type { AgentRunItem, AgentRunStatus, Project, TaskItem, TaskStatus, TeamDetail } from '@task-tg/shared';
 import { api, ApiError } from '../api';
+import { projectLabel, projectOptions } from '../projects';
 const props = defineProps<{ team: TeamDetail }>();
 const emit = defineEmits<{ 'session-expired': []; 'access-lost': [] }>();
 const tasks = ref<TaskItem[]>([]);
@@ -22,6 +23,7 @@ const conflicted = ref(false);
 const title = ref('');
 const description = ref('');
 const status = ref<TaskStatus>('TODO');
+const project = ref<Project | ''>('');
 const assigneeId = ref('');
 const deleting = ref(false);
 const agentRuns = ref<AgentRunItem[]>([]);
@@ -43,7 +45,7 @@ const latestAgentRun = computed(() => agentRuns.value[0] ?? null);
 const hasChanges = computed(() => {
   const task = editing.value;
   if (!task) return false;
-  return title.value.trim() !== task.title || description.value.trim() !== task.description || status.value !== task.status || (assigneeId.value || null) !== task.assigneeId;
+  return title.value.trim() !== task.title || description.value.trim() !== task.description || status.value !== task.status || project.value !== (task.project ?? '') || (assigneeId.value || null) !== task.assigneeId;
 });
 const base = `/teams/${props.team.id}/tasks`;
 function fail(cause: unknown) {
@@ -69,6 +71,7 @@ function agentFail(cause: unknown) {
     AGENT_NOT_CONFIGURED: 'Агент не настроен на сервере. Обратитесь к администратору.',
     AGENT_LEASE_EXPIRED: 'Сеанс агента истёк. Отправьте задачу ещё раз.',
     AGENT_STAGE_INVALID: 'Агент прислал этап в неверном порядке. Обновите карточку.',
+    PROJECT_REQUIRED: 'Укажите проект задачи перед отправкой агенту.',
     VERSION_CONFLICT: 'Задача изменилась. Сначала загрузите актуальную версию.',
     TEAM_NOT_FOUND: 'Доступ к команде закрыт.',
     TOO_MANY_REQUESTS: 'Слишком много запросов. Подождите минуту.',
@@ -130,7 +133,9 @@ function open(task: TaskItem | null) {
   editing.value = task; latest.value = null; conflicted.value = false; deleting.value = false;
   agentRuns.value = []; agentError.value = ''; agentNotice.value = ''; cancelingRunId.value = '';
   title.value = task?.title ?? ''; description.value = task?.description ?? '';
-  status.value = task?.status ?? 'TODO'; assigneeId.value = task?.assigneeId ?? '';
+  status.value = task?.status ?? 'TODO';
+  project.value = task?.project ?? (task ? '' : 'TG_BUDGET');
+  assigneeId.value = task?.assigneeId ?? '';
   error.value = ''; notice.value = ''; sheet.value?.showModal();
   if (task) void loadAgentRuns(task.id);
   void refreshMembers();
@@ -147,18 +152,19 @@ function acceptLatest(keepDraft: boolean) {
   editing.value = latest.value;
   if (!keepDraft) {
     title.value = latest.value.title; description.value = latest.value.description;
-    status.value = latest.value.status; assigneeId.value = latest.value.assigneeId ?? '';
+    status.value = latest.value.status; project.value = latest.value.project ?? '';
+    assigneeId.value = latest.value.assigneeId ?? '';
   }
   latest.value = null; conflicted.value = false; deleting.value = false;
   notice.value = keepDraft ? 'Ваш ввод сохранён. Проверьте его перед повторным сохранением.' : 'Загружены актуальные поля.';
 }
 async function save(remove = false) {
-  if (busy.value || conflicted.value || (!remove && !title.value.trim())) return;
+  if (busy.value || conflicted.value || (!remove && (!title.value.trim() || !project.value))) return;
   busy.value = true; error.value = '';
   try {
     const task = editing.value;
     const path = task ? `${base}/${task.id}` : base;
-    await api(path, remove ? { version: task?.version } : { title: title.value.trim(), description: description.value.trim(), status: status.value, assigneeId: assigneeId.value || null, ...(task ? { version: task.version } : {}) }, remove ? 'DELETE' : task ? 'PATCH' : 'POST');
+    await api(path, remove ? { version: task?.version } : { title: title.value.trim(), description: description.value.trim(), status: status.value, project: project.value, assigneeId: assigneeId.value || null, ...(task ? { version: task.version } : {}) }, remove ? 'DELETE' : task ? 'PATCH' : 'POST');
     sheet.value?.close(); notice.value = remove ? 'Задача удалена.' : 'Задача сохранена.';
   } catch (cause) {
     if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT') { conflicted.value = true; latest.value = null; }
@@ -169,13 +175,15 @@ async function save(remove = false) {
 async function sendToAgent() {
   const task = editing.value;
   if (!task || busy.value || agentBusy.value || agentActive.value || conflicted.value) return;
+  if (!task.project) { agentError.value = 'Укажите и сохраните проект задачи, чтобы отправить её агенту.'; return; }
   if (hasChanges.value) { agentError.value = 'Сначала сохраните изменения задачи, чтобы отправить её агенту.'; return; }
   agentBusy.value = true; agentError.value = ''; agentNotice.value = '';
   try {
     const result = await api<{ run: AgentRunItem; task: TaskItem }>(`${base}/${task.id}/agent-runs`, { version: task.version });
     editing.value = result.task;
     title.value = result.task.title; description.value = result.task.description;
-    status.value = result.task.status; assigneeId.value = result.task.assigneeId ?? '';
+    status.value = result.task.status; project.value = result.task.project ?? '';
+    assigneeId.value = result.task.assigneeId ?? '';
     agentRuns.value = [result.run, ...agentRuns.value.filter(run => run.id !== result.run.id)];
     agentNotice.value = 'Задача отправлена агенту. Этапы будут появляться здесь.';
     ensureAgentPolling();
@@ -292,7 +300,12 @@ defineExpose({ refresh: () => {
           :disabled="busy"
           @click="open(task)"
         >
-          <strong>{{ task.title }}</strong><span v-if="task.description">{{ task.description.slice(0, 140) }}</span>
+          <strong>{{ task.title }}</strong>
+          <small
+            class="project-badge"
+            :class="{ 'project-missing': !task.project }"
+          >{{ projectLabel(task.project) }}</small>
+          <span v-if="task.description">{{ task.description.slice(0, 140) }}</span>
           <small>{{ members.find(member => member.userId === task.assigneeId)?.firstName ?? (task.assigneeId ? 'Участник' : 'Без ответственного') }}</small>
         </button>
         <p
@@ -347,12 +360,34 @@ defineExpose({ refresh: () => {
           {{ notice }}
         </p>
         <fieldset :disabled="busy">
+          <label for="task-project">Проект</label><select
+            id="task-project"
+            v-model="project"
+            required
+            autofocus
+          >
+            <option
+              value=""
+              disabled
+            >
+              Выберите проект
+            </option>
+            <option
+              v-for="option in projectOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+          <p class="muted">
+            От проекта зависит, в каком репозитории агент создаст ветку и pull request.
+          </p>
           <label for="task-title">Название</label><input
             id="task-title"
             v-model="title"
             maxlength="160"
             required
-            autofocus
           >
           <label for="task-description">Описание</label><textarea
             id="task-description"
@@ -414,7 +449,7 @@ defineExpose({ refresh: () => {
           <template v-if="latest">
             <h4>{{ latest.title }}</h4><p class="task-description">
               {{ latest.description }}
-            </p><p>{{ labels[latest.status] }} · {{ members.find(member => member.userId === latest?.assigneeId)?.firstName ?? 'Без ответственного' }}</p>
+            </p><p>{{ labels[latest.status] }} · {{ projectLabel(latest.project) }} · {{ members.find(member => member.userId === latest?.assigneeId)?.firstName ?? 'Без ответственного' }}</p>
             <div class="dialog-actions">
               <button
                 type="button"
@@ -435,7 +470,7 @@ defineExpose({ refresh: () => {
         </div>
         <button
           class="full-width"
-          :disabled="busy || conflicted || !title.trim()"
+          :disabled="busy || conflicted || !title.trim() || !project"
         >
           {{ busy ? 'Сохраняем…' : 'Сохранить' }}
         </button>
@@ -455,7 +490,7 @@ defineExpose({ refresh: () => {
               >{{ agentStatusLabels[latestAgentRun.status] }}</span>
             </div>
             <p class="muted">
-              Агент оценит задачу, составит план, внесёт изменения в отдельной ветке и откроет pull request. Автоматического слияния нет.
+              Агент оценит задачу, составит план, внесёт изменения в ветке проекта «{{ projectLabel(editing.project) }}» и откроет pull request. Автоматического слияния нет.
             </p>
             <p
               v-if="agentError"
@@ -472,7 +507,13 @@ defineExpose({ refresh: () => {
               {{ agentNotice }}
             </p>
             <p
-              v-if="hasChanges"
+              v-if="!editing.project"
+              class="muted"
+            >
+              Укажите проект задачи и сохраните изменения, чтобы отправить её агенту.
+            </p>
+            <p
+              v-else-if="hasChanges"
               class="muted"
             >
               Сначала сохраните изменения задачи, чтобы отправить её агенту.
@@ -480,7 +521,7 @@ defineExpose({ refresh: () => {
             <button
               type="button"
               class="secondary full-width agent-send"
-              :disabled="agentBusy || busy || agentActive || conflicted || hasChanges"
+              :disabled="agentBusy || busy || agentActive || conflicted || hasChanges || !editing.project"
               @click="sendToAgent"
             >
               {{ agentBusy ? 'Отправляем…' : agentActive ? (latestAgentRun?.status === 'REVIEW' ? 'Pull request на проверке' : 'Агент работает…') : latestAgentRun ? 'Отправить агенту снова' : 'Отправить агенту' }}

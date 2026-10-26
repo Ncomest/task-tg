@@ -107,12 +107,18 @@ enum TaskStatus {
   DONE
 }
 
+enum Project {
+  TG_BUDGET
+  TASK_TG
+}
+
 model Task {
   id          String     @id @default(uuid())
   teamId      String
   title       String
   description String     @default("")
   status      TaskStatus @default(TODO)
+  project     Project?
   assigneeId  String?
   creatorId   String
   version     Int        @default(1)
@@ -133,6 +139,7 @@ model Idea {
   teamId      String
   title       String
   description String   @default("")
+  project     Project?
   creatorId   String
   version     Int      @default(1)
   taskId      String?  @unique
@@ -167,6 +174,7 @@ model AgentRun {
   taskVersion      Int
   taskTitle        String
   taskDescription  String         @default("")
+  project          Project?
   summary          String?
   branch           String?
   pullRequestUrl   String?

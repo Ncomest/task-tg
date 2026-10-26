@@ -75,6 +75,8 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .kanban-column h4 { margin: 4px 0 16px; }
 .task-card { display: grid; gap: 10px; width: 100%; margin-bottom: 12px; text-align: left; justify-content: stretch; background: var(--tg-theme-bg-color, #101827); color: inherit; border: 1px solid var(--tg-theme-section-separator-color, #53627c); overflow-wrap: anywhere; }
 .task-card span, .task-card small { color: var(--tg-theme-hint-color, #aab8d0); font-weight: 400; }
+.task-card .project-badge { justify-self: start; width: fit-content; margin: 0; padding: 3px 8px; border: 1px solid var(--tg-theme-link-color, #9cb6ff); border-radius: 999px; color: var(--tg-theme-link-color, #9cb6ff); font-size: 12px; }
+.task-card .project-badge.project-missing { border-color: #e9a2a2; color: #e9a2a2; }
 .task-description { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (min-width: 640px) { .task-filters { grid-template-columns: 1fr 1fr; align-items: end; } }
 .ideas-panel form > .secondary { margin-top: 12px; }
