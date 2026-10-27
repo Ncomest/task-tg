@@ -102,3 +102,8 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .agent-history ul { list-style: none; display: grid; gap: 8px; margin: 12px 0 0; padding: 0; }
 .agent-history li { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
 code { padding: 2px 6px; border-radius: 6px; background: var(--tg-theme-bg-color, #101827); font-family: ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; }
+
+.archive-link { display: inline-flex; align-items: center; gap: .4rem; }
+.task-card-wrapper { position: relative; }
+.task-card-wrapper .task-card { width: 100%; padding-right: 3.5rem; }
+.archive-action { position: absolute; right: .4rem; top: .4rem; min-width: 44px; min-height: 44px; display: grid; place-items: center; }

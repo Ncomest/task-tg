@@ -7,8 +7,8 @@ interface TaskInput { title: string; description: string; status: TaskStatus; pr
 interface TaskChanges { version: number; title?: string | undefined; description?: string | undefined; status?: TaskStatus | undefined; project?: Project | undefined; assigneeId?: string | null | undefined }
 interface IdeaInput { title: string; description: string; project: Project }
 interface IdeaChanges { version: number; title?: string | undefined; description?: string | undefined; project?: Project | undefined }
-interface Filters { q?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined; cursor?: string | undefined }
-const taskItem = (task: Task): TaskItem => ({ ...task, createdAt: task.createdAt.toISOString(), updatedAt: task.updatedAt.toISOString() });
+interface Filters { archived?: boolean | undefined; q?: string | undefined; status?: TaskStatus | undefined; assignee?: string | undefined; cursor?: string | undefined }
+const taskItem = (task: Task): TaskItem => ({ ...task, archivedAt: task.archivedAt?.toISOString() ?? null, completedAt: task.completedAt?.toISOString() ?? null, createdAt: task.createdAt.toISOString(), updatedAt: task.updatedAt.toISOString() });
 const ideaItem = (idea: Idea): IdeaItem => ({ ...idea, convertedAt: idea.convertedAt?.toISOString() ?? null, createdAt: idea.createdAt.toISOString(), updatedAt: idea.updatedAt.toISOString() });
 const conflict = () => new HttpError(409, 'VERSION_CONFLICT');
 
@@ -29,19 +29,28 @@ export function createWorkService(db: PrismaClient) {
   return {
     listTasks(teamId: string, userId: string, filters: Filters = {}) {
       return withTeamMember(db, teamId, userId, async (tx) => {
-        if (filters.cursor && !await tx.task.findFirst({ where: { id: filters.cursor, teamId } })) throw new HttpError(400, 'INVALID_CURSOR');
+        if (filters.cursor && !await tx.task.findFirst({ where: { id: filters.cursor, teamId, archivedAt: filters.archived ? { not: null } : null } })) throw new HttpError(400, 'INVALID_CURSOR');
         const rows = await tx.task.findMany({
-          where: { teamId, ...(filters.status ? { status: filters.status } : {}), ...(filters.assignee ? { assigneeId: filters.assignee === 'unassigned' ? null : filters.assignee === 'me' ? userId : filters.assignee } : {}), ...(filters.q ? { OR: [{ title: { contains: filters.q, mode: 'insensitive' } }, { description: { contains: filters.q, mode: 'insensitive' } }] } : {}) },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 51,
+          where: { teamId, archivedAt: filters.archived ? { not: null } : null, ...(filters.status ? { status: filters.status } : {}), ...(filters.assignee ? { assigneeId: filters.assignee === 'unassigned' ? null : filters.assignee === 'me' ? userId : filters.assignee } : {}), ...(filters.q ? { OR: [{ title: { contains: filters.q, mode: 'insensitive' } }, { description: { contains: filters.q, mode: 'insensitive' } }] } : {}) },
+          orderBy: filters.archived ? [{ archivedAt: 'desc' }, { id: 'desc' }] : [{ createdAt: 'desc' }, { id: 'desc' }], take: 51,
           ...(filters.cursor ? { cursor: { id: filters.cursor }, skip: 1 } : {}),
         });
         return { tasks: rows.slice(0, 50).map(taskItem), nextCursor: rows.length > 50 ? rows[49]?.id ?? null : null };
       });
     },
+    setArchived(teamId: string, userId: string, id: string, version: number, archived: boolean) {
+      return withTeamMember(db, teamId, userId, async (tx) => {
+        const task = await findTask(tx, teamId, id);
+        if (task.version !== version) throw conflict();
+        if (task.status !== 'DONE') throw new HttpError(409, 'TASK_NOT_DONE');
+        if (Boolean(task.archivedAt) === archived) return taskItem(task);
+        return taskItem(await tx.task.update({ where: { id }, data: { archivedAt: archived ? new Date() : null, version: { increment: 1 } } }));
+      });
+    },
     createTask(teamId: string, userId: string, input: TaskInput) {
       return withTeamMember(db, teamId, userId, async (tx) => {
         await assignee(tx, teamId, input.assigneeId);
-        return taskItem(await tx.task.create({ data: { ...input, teamId, creatorId: userId } }));
+        return taskItem(await tx.task.create({ data: { ...input, completedAt: input.status === 'DONE' ? new Date() : null, teamId, creatorId: userId } }));
       });
     },
     getTask(teamId: string, userId: string, id: string) {
@@ -54,14 +63,16 @@ export function createWorkService(db: PrismaClient) {
       return withTeamMember(db, teamId, userId, async (tx) => {
         const task = await findTask(tx, teamId, id);
         if (task.version !== input.version) throw conflict();
+        if (task.archivedAt) throw new HttpError(409, 'TASK_ARCHIVED');
         await assignee(tx, teamId, input.assigneeId);
-        return taskItem(await tx.task.update({ where: { id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.status !== undefined ? { status: input.status } : {}), ...(input.project !== undefined ? { project: input.project } : {}), ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}), version: { increment: 1 } } }));
+        return taskItem(await tx.task.update({ where: { id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.status !== undefined ? { status: input.status, completedAt: input.status === 'DONE' ? (task.status === 'DONE' ? task.completedAt : new Date()) : null } : {}), ...(input.project !== undefined ? { project: input.project } : {}), ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}), version: { increment: 1 } } }));
       });
     },
     removeTask(teamId: string, userId: string, id: string, version: number) {
       return withTeamMember(db, teamId, userId, async (tx) => {
         const task = await findTask(tx, teamId, id);
         if (task.version !== version) throw conflict();
+        if (task.archivedAt) throw new HttpError(409, 'TASK_ARCHIVED');
         await tx.task.delete({ where: { id } });
       });
     },

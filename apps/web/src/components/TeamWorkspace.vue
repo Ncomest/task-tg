@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import type { CreatedTeamInvite, TeamDetail, TeamInviteSummary, TeamMember, TeamRole, TeamSummary } from '@task-tg/shared';
 import { api, ApiError } from '../api';
 import { launchInviteCode } from '../telegram';
@@ -10,6 +10,8 @@ const props = defineProps<{ currentUserId: string }>();
 const emit = defineEmits<{ 'session-expired': [] }>();
 const teams = ref<TeamSummary[]>([]);
 const selected = ref<TeamDetail | null>(null);
+const archiveView = ref(false);
+watch(() => selected.value?.id, () => { archiveView.value = false; });
 const taskBoard = ref<InstanceType<typeof TaskBoard> | null>(null);
 const invites = ref<TeamInviteSummary[]>([]);
 const freshInvite = ref<CreatedTeamInvite | null>(null);
@@ -337,10 +339,13 @@ onMounted(loadTeams);
         ref="taskBoard"
         :key="selected.id"
         :team="selected"
+        :current-user-id="currentUserId"
+        @archive-view="archiveView = $event"
         @session-expired="emit('session-expired')"
         @access-lost="selected = null; loadTeams()"
       />
       <IdeaBoard
+        v-if="!archiveView"
         :key="selected.id"
         :team-id="selected.id"
         @session-expired="emit('session-expired')"
@@ -348,6 +353,7 @@ onMounted(loadTeams);
         @converted="taskBoard?.refresh()"
       />
       <section
+        v-if="!archiveView"
         class="panel"
         aria-labelledby="members-title"
       >
@@ -390,7 +396,7 @@ onMounted(loadTeams);
         </ul>
       </section>
       <section
-        v-if="selected.role !== 'MEMBER'"
+        v-if="!archiveView && selected.role !== 'MEMBER'"
         class="panel"
         aria-labelledby="invites-title"
       >

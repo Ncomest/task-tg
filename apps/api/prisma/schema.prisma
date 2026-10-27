@@ -127,11 +127,14 @@ model Task {
   team        Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
   assignee    User?      @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   creator     User       @relation("TaskCreator", fields: [creatorId], references: [id])
+  archivedAt  DateTime? @map("archived_at")
+  completedAt DateTime? @map("completed_at")
   sourceIdea  Idea?
   agentRuns   AgentRun[]
 
   @@index([teamId, createdAt, id])
   @@index([teamId, assigneeId, status])
+  @@index([teamId, archivedAt, id])
 }
 
 model Idea {

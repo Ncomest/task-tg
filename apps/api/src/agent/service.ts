@@ -22,7 +22,7 @@ interface CompleteInput {
   taskStatus?: TaskStatus | undefined;
 }
 
-const taskItem = (task: Task): TaskItem => ({ ...task, createdAt: task.createdAt.toISOString(), updatedAt: task.updatedAt.toISOString() });
+const taskItem = (task: Task): TaskItem => ({ ...task, archivedAt: task.archivedAt?.toISOString() ?? null, completedAt: task.completedAt?.toISOString() ?? null, createdAt: task.createdAt.toISOString(), updatedAt: task.updatedAt.toISOString() });
 const eventItem = (event: AgentEvent): AgentEventItem => ({ ...event, createdAt: event.createdAt.toISOString() });
 const runItem = (run: AgentRunWithEvents): AgentRunItem => ({
   id: run.id,
@@ -129,10 +129,11 @@ export function createAgentService(db: PrismaClient) {
       return withTeamMember(db, teamId, userId, async (tx) => {
         const task = await findTask(tx, teamId, taskId);
         if (task.version !== version) throw new HttpError(409, 'VERSION_CONFLICT');
+        if (task.archivedAt) throw new HttpError(409, 'TASK_ARCHIVED');
         if (!task.project) throw new HttpError(409, 'PROJECT_REQUIRED');
         const active = await tx.agentRun.findFirst({ where: { taskId, status: { in: ACTIVE_STATUSES } }, select: { id: true } });
         if (active) throw new HttpError(409, 'AGENT_RUN_ACTIVE');
-        const updatedTask = task.status === 'IN_PROGRESS' ? task : await tx.task.update({ where: { id: task.id }, data: { status: 'IN_PROGRESS', version: { increment: 1 } } });
+        const updatedTask = task.status === 'IN_PROGRESS' ? task : await tx.task.update({ where: { id: task.id }, data: { status: 'IN_PROGRESS', completedAt: null, version: { increment: 1 } } });
         const run = await tx.agentRun.create({
           data: {
             taskId,
@@ -248,8 +249,8 @@ export function createAgentService(db: PrismaClient) {
         let changedTask: Task | null = null;
         if (input.taskStatus) {
           const task = await tx.task.findUnique({ where: { id: run.taskId } });
-          if (task && task.status !== input.taskStatus) {
-            changedTask = await tx.task.update({ where: { id: task.id }, data: { status: input.taskStatus, version: { increment: 1 } } });
+          if (task && !task.archivedAt && task.status !== input.taskStatus) {
+            changedTask = await tx.task.update({ where: { id: task.id }, data: { status: input.taskStatus, completedAt: input.taskStatus === 'DONE' ? now : null, version: { increment: 1 } } });
           }
         }
         const updated = await tx.agentRun.update({

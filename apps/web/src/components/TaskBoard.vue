@@ -1,11 +1,45 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { AgentRunItem, AgentRunStatus, Project, TaskItem, TaskStatus, TeamDetail } from '@task-tg/shared';
+import ArchiveIcon from './ArchiveIcon.vue';
 import { api, ApiError } from '../api';
 import { projectLabel, projectOptions } from '../projects';
-const props = defineProps<{ team: TeamDetail }>();
-const emit = defineEmits<{ 'session-expired': []; 'access-lost': [] }>();
+const props = defineProps<{ team: TeamDetail; currentUserId: string }>();
+const emit = defineEmits<{ 'session-expired': []; 'access-lost': []; 'archive-view': [value: boolean] }>();
 const tasks = ref<TaskItem[]>([]);
+const archived = ref(false);
+const pending = ref(new Set<string>());
+const undoTask = ref<TaskItem | null>(null);
+let loadSequence = 0;
+let mounted = true;
+function visible(task: TaskItem) {
+  return Boolean(task.archivedAt) === archived.value && (archived.value || ( (!statusFilter.value || task.status === statusFilter.value) && (!assigneeFilter.value || (assigneeFilter.value === 'unassigned' ? !task.assigneeId : task.assigneeId === (assigneeFilter.value === 'me' ? props.currentUserId : assigneeFilter.value))) && (!q.value.trim() || `${task.title} ${task.description}`.toLowerCase().includes(q.value.trim().toLowerCase()))));
+}
+async function setArchived(task: TaskItem, archive: boolean) {
+  if (pending.value.has(task.id) || busy.value) return;
+  const index = tasks.value.findIndex(item => item.id === task.id);
+  pending.value.add(task.id);
+  tasks.value = tasks.value.filter(item => item.id !== task.id);
+  error.value = ''; notice.value = ''; undoTask.value = null;
+  try {
+    const result = await api<{ task: TaskItem }>(`${base}/${task.id}/${archive ? 'archive' : 'restore'}`, { version: task.version });
+    if (!mounted) return;
+    if (visible(result.task)) tasks.value.splice(Math.max(index, 0), 0, result.task);
+    notice.value = archive ? 'Задача перемещена в архив.' : 'Задача восстановлена в «Готово».';
+    if (archive) undoTask.value = result.task;
+  } catch (cause) {
+    if (!mounted) return;
+    if (visible(task) && !tasks.value.some(item => item.id === task.id)) tasks.value.splice(Math.max(index, 0), 0, task);
+    fail(cause);
+  } finally { pending.value.delete(task.id); }
+}
+function switchArchive() {
+  if (busy.value || pending.value.size) return;
+  archived.value = !archived.value;
+  emit('archive-view', archived.value);
+  tasks.value = []; cursor.value = null; error.value = ''; notice.value = ''; undoTask.value = null;
+  void load();
+}
 const members = ref(props.team.members);
 const busy = ref(false);
 const refreshPending = ref(false);
@@ -52,6 +86,8 @@ function fail(cause: unknown) {
   if (cause instanceof ApiError && cause.status === 401) { emit('session-expired'); return; }
   if (cause instanceof ApiError && cause.code === 'TEAM_NOT_FOUND') emit('access-lost');
   const messages: Record<string, string> = {
+    TASK_NOT_DONE: 'Архивировать можно только выполненные задачи.',
+    TASK_ARCHIVED: 'Задача находится в архиве. Сначала восстановите её.',
     ASSIGNEE_NOT_MEMBER: 'Ответственный больше не состоит в команде. Обновите участников и выберите другого.',
     TASK_NOT_FOUND: 'Задача удалена. Ваш текст остаётся в форме; скопируйте его перед закрытием.',
     TEAM_NOT_FOUND: 'Доступ к команде закрыт.', INVALID_REQUEST: 'Проверьте поля формы.',
@@ -104,18 +140,20 @@ async function loadAgentRuns(taskId: string, polling = false) {
   }
 }
 function formattedDate(value: string) {
-  return new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 async function load(more = false) {
-  if (busy.value) return;
+  if (busy.value || pending.value.size) return;
+  const sequence = ++loadSequence;
   busy.value = true; error.value = '';
   try {
     const query = new URLSearchParams();
-    if (q.value.trim()) query.set('q', q.value.trim());
-    if (statusFilter.value) query.set('status', statusFilter.value);
-    if (assigneeFilter.value) query.set('assignee', assigneeFilter.value);
+    if (!archived.value && q.value.trim()) query.set('q', q.value.trim());
+    if (!archived.value && statusFilter.value) query.set('status', statusFilter.value);
+    if (!archived.value && assigneeFilter.value) query.set('assignee', assigneeFilter.value);
     if (more && cursor.value) query.set('cursor', cursor.value);
-    const result = await api<{ tasks: TaskItem[]; nextCursor: string | null }>(`${base}?${query}`);
+    const result = await api<{ tasks: TaskItem[]; nextCursor: string | null }>(`${archived.value ? `/teams/${props.team.id}/archive` : base}?${query}`);
+    if (!mounted || sequence !== loadSequence) return;
     tasks.value = more ? [...tasks.value, ...result.tasks.filter(task => !tasks.value.some(old => old.id === task.id))] : result.tasks;
     cursor.value = result.nextCursor;
   } catch (cause) { fail(cause); }
@@ -215,7 +253,7 @@ async function cancelAgentRun(run: AgentRunItem) {
   }
 }
 onMounted(() => load());
-onUnmounted(stopAgentPolling);
+onUnmounted(() => { mounted = false; stopAgentPolling(); });
 defineExpose({ refresh: () => {
   if (busy.value) refreshPending.value = true;
   else void load();
@@ -229,16 +267,25 @@ defineExpose({ refresh: () => {
   >
     <div class="section-header">
       <h3 id="tasks-title">
-        Задачи
+        {{ archived ? 'Архив задач' : 'Задачи' }}
       </h3>
       <button
-        :disabled="busy"
+        class="secondary archive-link"
+        :disabled="busy || pending.size > 0"
+        @click="switchArchive"
+      >
+        <ArchiveIcon />{{ archived ? 'К задачам' : 'Архив' }}
+      </button>
+      <button
+        v-if="!archived"
+        :disabled="busy || pending.size > 0"
         @click="open(null)"
       >
         + Задача
       </button>
     </div>
     <form
+      v-if="!archived"
       class="task-filters"
       @submit.prevent="load()"
     >
@@ -284,8 +331,65 @@ defineExpose({ refresh: () => {
       role="status"
     >
       {{ notice }}
+      <button
+        v-if="undoTask"
+        class="text-button"
+        :disabled="busy || pending.size > 0"
+        @click="setArchived(undoTask, false)"
+      >
+        Отменить
+      </button>
     </p>
-    <div class="kanban">
+    <p
+      v-if="busy"
+      role="status"
+      class="muted"
+    >
+      Загрузка…
+    </p>
+    <template v-if="archived">
+      <button
+        v-if="error"
+        class="secondary"
+        :disabled="busy"
+        @click="load()"
+      >
+        Повторить
+      </button>
+      <p
+        v-if="!busy && !error && !tasks.length"
+        class="muted"
+      >
+        Архив пока пуст
+      </p>
+      <article
+        v-for="task in tasks"
+        :key="task.id"
+        class="panel"
+      >
+        <h4>{{ task.title }}</h4>
+        <p class="task-description">
+          {{ task.description }}
+        </p>
+        <p>{{ members.find(member => member.userId === task.assigneeId)?.firstName ?? (task.assigneeId ? 'Участник' : 'Без ответственного') }}</p>
+        <p class="muted">
+          Завершена: {{ task.completedAt ? formattedDate(task.completedAt) : 'Не указана' }}
+        </p>
+        <p class="muted">
+          В архиве: {{ task.archivedAt ? formattedDate(task.archivedAt) : '' }}
+        </p>
+        <button
+          :disabled="busy || pending.size > 0"
+          @click="setArchived(task, false)"
+        >
+          Восстановить
+        </button>
+      </article>
+    </template>
+    <div
+      v-else
+      class="kanban"
+    >
       <section
         v-for="column in columns"
         :key="column"
@@ -293,21 +397,35 @@ defineExpose({ refresh: () => {
         :aria-label="labels[column]"
       >
         <h4>{{ labels[column] }} · {{ tasks.filter(task => task.status === column).length }}</h4>
-        <button
+        <article
           v-for="task in tasks.filter(item => item.status === column)"
           :key="task.id"
-          class="task-card"
-          :disabled="busy"
-          @click="open(task)"
+          class="task-card-wrapper"
         >
-          <strong>{{ task.title }}</strong>
-          <small
-            class="project-badge"
-            :class="{ 'project-missing': !task.project }"
-          >{{ projectLabel(task.project) }}</small>
-          <span v-if="task.description">{{ task.description.slice(0, 140) }}</span>
-          <small>{{ members.find(member => member.userId === task.assigneeId)?.firstName ?? (task.assigneeId ? 'Участник' : 'Без ответственного') }}</small>
-        </button>
+          <button
+            class="task-card"
+            :disabled="busy || pending.size > 0"
+            @click="open(task)"
+          >
+            <strong>{{ task.title }}</strong>
+            <small
+              class="project-badge"
+              :class="{ 'project-missing': !task.project }"
+            >{{ projectLabel(task.project) }}</small>
+            <span v-if="task.description">{{ task.description.slice(0, 140) }}</span>
+            <small>{{ members.find(member => member.userId === task.assigneeId)?.firstName ?? (task.assigneeId ? 'Участник' : 'Без ответственного') }}</small>
+          </button>
+          <button
+            v-if="task.status === 'DONE'"
+            class="secondary archive-action"
+            :disabled="busy || pending.size > 0"
+            :aria-label="`Архивировать: ${task.title}`"
+            title="Архивировать"
+            @click="setArchived(task, true)"
+          >
+            <ArchiveIcon />
+          </button>
+        </article>
         <p
           v-if="!tasks.some(task => task.status === column)"
           class="muted"
