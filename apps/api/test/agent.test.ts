@@ -14,7 +14,7 @@ const runId = '00000000-0000-4000-8000-000000000003';
 const leaseToken = 'lease-token-for-tests-12345678901234567890';
 
 const sampleTask = (): TaskItem => ({
-  id: taskId, teamId, title: 'Task', description: 'Details', status: 'IN_PROGRESS', project: 'TASK_TG', assigneeId: null,
+  id: taskId, teamId, title: 'Task', description: 'Details', archivedAt: null, completedAt: null, status: 'IN_PROGRESS', project: 'TASK_TG', assigneeId: null,
   creatorId: user.id, version: 2, createdAt: '2026-10-26T00:00:00.000Z', updatedAt: '2026-10-26T00:00:00.000Z',
 });
 const sampleRun = (overrides: Partial<AgentRunItem> = {}): AgentRunItem => ({

@@ -40,6 +40,13 @@ async function notifyTaskCreated(request: FastifyRequest, notifier: TaskNotifier
 }
 
 export function registerWorkRoutes(app: FastifyInstance, work: WorkService, notifier?: TaskNotifier) {
+  app.get('/api/teams/:teamId/archive', (request) => work.listTasks(parse(params, request.params).teamId, actor(request), { ...parse(query, request.query), archived: true }));
+  for (const action of ['archive', 'restore'] as const) {
+    app.post(`/api/teams/:teamId/tasks/:id/${action}`, async (request) => {
+      const p = parse(resource, request.params);
+      return { task: await work.setArchived(p.teamId, actor(request), p.id, parse(z.object({ version }).strict(), request.body).version, action === 'archive') };
+    });
+  }
   app.get('/api/teams/:teamId/tasks/:id', async (request) => { const p = parse(resource, request.params); return { task: await work.getTask(p.teamId, actor(request), p.id) }; });
   app.get('/api/teams/:teamId/tasks', (request) => work.listTasks(parse(params, request.params).teamId, actor(request), parse(query.extend({ status: status.optional(), assignee: z.union([z.uuid(), z.enum(['me', 'unassigned'])]).optional() }), request.query)));
   app.post('/api/teams/:teamId/tasks', async (request, reply) => {

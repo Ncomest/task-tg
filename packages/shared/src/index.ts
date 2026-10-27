@@ -64,6 +64,8 @@ export interface TaskItem {
   title: string;
   description: string;
   status: TaskStatus;
+  archivedAt: string | null;
+  completedAt: string | null;
   project: Project | null;
   assigneeId: string | null;
   creatorId: string;

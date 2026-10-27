@@ -14,7 +14,7 @@ const taskId = '00000000-0000-4000-8000-000000000002';
 const ideaId = '00000000-0000-4000-8000-000000000003';
 const user: CurrentUser = { id: 'author', telegramId: '1', firstName: 'Anna', lastName: null, username: null };
 const task: TaskItem = {
-  id: taskId, teamId, title: 'Ship notifications', description: 'Details', status: 'TODO', project: 'TASK_TG', assigneeId: null,
+  id: taskId, teamId, title: 'Ship notifications', description: 'Details', archivedAt: null, completedAt: null, status: 'TODO', project: 'TASK_TG', assigneeId: null,
   creatorId: user.id, version: 1, createdAt: '2026-10-26T00:00:00.000Z', updatedAt: '2026-10-26T00:00:00.000Z',
 };
 const idea: IdeaItem = {
