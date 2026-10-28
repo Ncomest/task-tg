@@ -28,8 +28,16 @@
   `npm run build`; все 8 миграций и `test:agent-integration` на временной
   PostgreSQL 17; auth/teams/tasks/ideas integration — PASS; `prisma migrate diff`
   без drift.
-- Ветка `feature/task-chat`, PR #5. Production-миграция и деплой не
-  выполнялись.
+- PR #5 merged в `main` (`af9ea14`). Production-деплой выполнен 2026-10-28:
+  миграция `20261028120000_agent_messages` применена, API/web healthy,
+  публичный chat-маршрут без сессии отвечает 401. Бэкап:
+  `.backups/deploy-chat-20261028T055933Z/`; образы отката:
+  `task-tg-api:before-chat-20261028T055933Z`,
+  `task-tg-web:before-chat-20261028T055933Z`.
+- Worker перезапущен вручную на новом коде (PID 4476, лог
+  `agent-worker.20261028T070959Z.log`). Автозапуск не настраивался.
+- Реальная Telegram/UI-приёмка чата и живой worker smoke с сообщением
+  не выполнялись: нужен пользовательский Telegram-сеанс.
 
 Ограничения:
 - Это MVP без постоянной OpenCode-сессии: контекст передаётся снимком
@@ -274,9 +282,13 @@ Caddy — 80/8443; web 8080 loopback, API/Postgres не опубликованы
 
 До правок этапа 6: /opt/task-tg/.backups/stage6-20261025T203731Z/
 source.tar.gz, server.env, env.sha256, port443.txt, database.dump, database.contents.
-.backups/stage6-latest указывает этот каталог. Образы до правок:
-task-tg-api:before-stage6-20261025, task-tg-web:before-stage6-20261025.
-Предыдущие stage5/stage4/auth/teams копии и образы сохранены.
+.backups/stage6-latest указывает этот каталог. Исторические образы
+stage6/stage5/stage4/auth/teams удалены 2026-10-28 при очистке диска;
+исходники и дампы в `.backups` сохранены. Для отката текущего деплоя
+используются `before-chat` образы.
+- 2026-10-28: при деплое чата диск был заполнен на 100%; удалены старые
+  rollback-образы task-tg, build cache и архивные journal-файлы. Сохранены
+  before-chat образы, все `.backups` и production `.env`; свободно ~3,7 ГБ.
 Логи: /tmp/task-stage6-restore.log, task-stage6-integration.log,
  task-stage6-unit.log, task-stage6-web-build.log, task-stage6-web-deploy.log.
 Скрипт текущей интеграции /opt/task-tg/run-auth-integration.sh требует старого
