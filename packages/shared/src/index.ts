@@ -110,6 +110,19 @@ export interface AgentEventItem {
   createdAt: string;
 }
 
+export type AgentMessageRole = 'USER' | 'AGENT';
+
+export interface AgentMessageItem {
+  id: string;
+  taskId: string;
+  teamId: string;
+  runId: string | null;
+  authorId: string | null;
+  role: AgentMessageRole;
+  body: string;
+  createdAt: string;
+}
+
 export interface AgentRunItem {
   id: string;
   taskId: string;
@@ -134,4 +147,6 @@ export interface AgentRunItem {
 export interface AgentRunClaim extends AgentRunItem {
   leaseToken: string;
   leaseExpiresAt: string;
+  /** Snapshot of recent task conversation, supplied to the worker as untrusted context. */
+  context: string | null;
 }

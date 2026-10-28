@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { AgentRunItem, TaskItem } from '@task-tg/shared';
+import type { AgentMessageItem, AgentRunItem, TaskItem } from '@task-tg/shared';
 import type { AgentService } from '../src/agent/service.js';
 import { buildApp } from '../src/app.js';
 import { AuthError } from '../src/auth/telegram.js';
@@ -23,11 +23,17 @@ const sampleRun = (overrides: Partial<AgentRunItem> = {}): AgentRunItem => ({
   error: null, startedAt: null, finishedAt: null, createdAt: '2026-10-26T00:00:00.000Z',
   updatedAt: '2026-10-26T00:00:00.000Z', events: [], ...overrides,
 });
+const sampleMessage = (overrides: Partial<AgentMessageItem> = {}): AgentMessageItem => ({
+  id: '00000000-0000-4000-8000-000000000004', taskId, teamId, runId: null, authorId: user.id,
+  role: 'USER', body: 'Уточнение', createdAt: '2026-10-26T00:00:00.000Z', ...overrides,
+});
 
 function fakeAgent(calls: string[]) {
   return {
     listRuns: async (task: string, team: string, actor: string) => { calls.push(`list:${task}:${team}:${actor}`); return { runs: [sampleRun()] }; },
     createRun: async (task: string, team: string, actor: string, version: number) => { calls.push(`create:${task}:${team}:${actor}:${version}`); return { run: sampleRun(), task: sampleTask() }; },
+    listMessages: async (task: string, team: string, actor: string) => { calls.push(`messages:${task}:${team}:${actor}`); return { messages: [sampleMessage()] }; },
+    sendMessage: async (task: string, team: string, actor: string, body: string) => { calls.push(`send:${task}:${team}:${actor}:${body}`); return { message: sampleMessage({ body }), run: sampleRun(), task: sampleTask() }; },
     cancelRun: async (task: string, team: string, actor: string, run: string) => { calls.push(`cancel:${task}:${team}:${actor}:${run}`); return { run: sampleRun({ status: 'CANCELLED' }) }; },
     claim: async (worker: string) => { calls.push(`claim:${worker}`); return null; },
     heartbeat: async (run: string, lease: string) => { calls.push(`heartbeat:${run}:${lease}`); return { status: 'ASSESSING' as const, leaseExpiresAt: '2026-10-26T00:03:00.000Z' }; },
@@ -104,6 +110,25 @@ test('team agent routes stay behind cookie auth, Origin checks and task ids', as
   } finally { await app.close(); }
 });
 
+test('task chat routes require membership and create a user message with a run', async () => {
+  const { app, calls } = await fixture();
+  try {
+    const base = `/api/teams/${teamId}/tasks/${taskId}/agent-messages`;
+    assert.equal((await app.inject({ method: 'GET', url: base })).statusCode, 401);
+    assert.equal((await app.inject({ method: 'POST', url: base, payload: { body: 'hello' } })).statusCode, 403);
+    assert.equal((await app.inject({ method: 'POST', url: base, headers: { origin }, payload: { body: 'hello' } })).statusCode, 401);
+    const list = await app.inject({ method: 'GET', url: base, headers: { cookie: 'tasktg_dev=alice' } });
+    assert.equal(list.statusCode, 200);
+    assert.equal(list.json().messages[0].body, 'Уточнение');
+    const sent = await app.inject({ method: 'POST', url: base, headers: userHeaders, payload: { body: '  Уточнение  ' } });
+    assert.equal(sent.statusCode, 201);
+    assert.equal(sent.json().message.body, 'Уточнение');
+    assert.equal(sent.json().run.status, 'QUEUED');
+    assert.ok(calls.includes(`send:${taskId}:${teamId}:${user.id}:Уточнение`));
+    assert.equal((await app.inject({ method: 'POST', url: base, headers: userHeaders, payload: { body: '' } })).statusCode, 400);
+  } finally { await app.close(); }
+});
+
 test('worker routes report a clear configuration error when the token is absent', async () => {
   const { app } = await fixture({ configured: false });
   try {
@@ -113,5 +138,8 @@ test('worker routes report a clear configuration error when the token is absent'
     const create = await app.inject({ method: 'POST', url: `/api/teams/${teamId}/tasks/${taskId}/agent-runs`, headers: userHeaders, payload: { version: 2 } });
     assert.equal(create.statusCode, 503);
     assert.equal(create.json().error, 'AGENT_NOT_CONFIGURED');
+    const message = await app.inject({ method: 'POST', url: `/api/teams/${teamId}/tasks/${taskId}/agent-messages`, headers: userHeaders, payload: { body: 'hello' } });
+    assert.equal(message.statusCode, 503);
+    assert.equal(message.json().error, 'AGENT_NOT_CONFIGURED');
   } finally { await app.close(); }
 });

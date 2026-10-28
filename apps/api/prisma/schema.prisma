@@ -31,6 +31,7 @@ model User {
   createdTasks Task[] @relation("TaskCreator")
   createdIdeas Idea[]
   createdAgentRuns AgentRun[] @relation("AgentRunCreator")
+  agentMessages AgentMessage[]
 }
 
 model Session {
@@ -68,6 +69,7 @@ model Team {
   tasks       Task[]
   ideas       Idea[]
   agentRuns   AgentRun[]
+  agentMessages AgentMessage[]
 }
 
 model TeamMembership {
@@ -131,6 +133,7 @@ model Task {
   completedAt DateTime? @map("completed_at")
   sourceIdea  Idea?
   agentRuns   AgentRun[]
+  agentMessages AgentMessage[]
 
   @@index([teamId, createdAt, id])
   @@index([teamId, assigneeId, status])
@@ -178,6 +181,8 @@ model AgentRun {
   taskTitle        String
   taskDescription  String         @default("")
   project          Project?
+  /** Snapshot of recent chat messages, rendered as untrusted context for the worker. */
+  context          String?
   summary          String?
   branch           String?
   pullRequestUrl   String?
@@ -194,6 +199,7 @@ model AgentRun {
   team             Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
   createdBy        User           @relation("AgentRunCreator", fields: [createdById], references: [id], onDelete: Restrict)
   events           AgentEvent[]
+  agentMessages    AgentMessage[]
 
   @@index([taskId, createdAt])
   @@index([teamId, createdAt])
@@ -210,4 +216,28 @@ model AgentEvent {
   run       AgentRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@index([runId, createdAt])
+}
+
+enum AgentMessageRole {
+  USER
+  AGENT
+}
+
+model AgentMessage {
+  id        String           @id @default(uuid())
+  taskId    String
+  teamId    String
+  runId     String?
+  authorId  String?
+  role      AgentMessageRole
+  body      String
+  createdAt DateTime         @default(now())
+  task      Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  team      Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  run       AgentRun?        @relation(fields: [runId], references: [id], onDelete: SetNull)
+  author    User?            @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+  @@index([teamId, createdAt])
+  @@index([runId])
 }
