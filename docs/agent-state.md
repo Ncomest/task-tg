@@ -22,10 +22,14 @@
   при завершении — summary/error. Каждое сообщение начинает новый запуск и
   worktree.
 - UI: история сообщений, поле ввода, опрос сообщений вместе с запуском,
-  блокировка ввода во время работы агента и при несохранённых изменениях.
-- Проверки: `npm run typecheck`, `npm run lint`, `npm test` (19),
-  `npm run build`; миграции и `test:agent-integration` на временной
-  PostgreSQL 17; auth/teams/tasks/ideas integration — PASS.
+  блокировка ввода во время работы агента, при несохранённых изменениях и
+  для архивной задачи.
+- Проверки: `npm run typecheck`, `npm run lint`, `npm test` (23),
+  `npm run build`; все 8 миграций и `test:agent-integration` на временной
+  PostgreSQL 17; auth/teams/tasks/ideas integration — PASS; `prisma migrate diff`
+  без drift.
+- Ветка `feature/task-chat`, PR #5. Production-миграция и деплой не
+  выполнялись.
 
 Ограничения:
 - Это MVP без постоянной OpenCode-сессии: контекст передаётся снимком
@@ -33,7 +37,6 @@
   Незакоммиченные изменения при `NEEDS_INPUT` не сохраняются.
 - Вопросы агента через helper доступны в профиле `TASK_TG`; в `TG_BUDGET`
   helper отключён, поэтому там ответ агента приходит как summary.
-- Production-миграция и деплой не выполнялись в этой сессии.
 
 ## Проекты задач и маршрутизация (2026-10-26)
 
