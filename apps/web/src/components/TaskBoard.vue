@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import type { AgentRunItem, AgentRunStatus, Project, TaskItem, TaskStatus, TeamDetail } from '@task-tg/shared';
+import type { AgentMessageItem, AgentRunItem, AgentRunStatus, Project, TaskItem, TaskStatus, TeamDetail } from '@task-tg/shared';
 import ArchiveIcon from './ArchiveIcon.vue';
 import { api, ApiError } from '../api';
 import { projectLabel, projectOptions } from '../projects';
@@ -61,8 +61,12 @@ const project = ref<Project | ''>('');
 const assigneeId = ref('');
 const deleting = ref(false);
 const agentRuns = ref<AgentRunItem[]>([]);
+const agentMessages = ref<AgentMessageItem[]>([]);
+const agentMessageText = ref('');
 const agentBusy = ref(false);
+const agentChatBusy = ref(false);
 const agentPollBusy = ref(false);
+const agentMessagesPollBusy = ref(false);
 const agentError = ref('');
 const agentNotice = ref('');
 const cancelingRunId = ref('');
@@ -81,6 +85,7 @@ const hasChanges = computed(() => {
   if (!task) return false;
   return title.value.trim() !== task.title || description.value.trim() !== task.description || status.value !== task.status || project.value !== (task.project ?? '') || (assigneeId.value || null) !== task.assigneeId;
 });
+const agentChatDisabled = computed(() => agentChatBusy.value || agentBusy.value || busy.value || agentActive.value || conflicted.value || hasChanges.value || !editing.value?.project || Boolean(editing.value?.archivedAt));
 const base = `/teams/${props.team.id}/tasks`;
 function fail(cause: unknown) {
   if (cause instanceof ApiError && cause.status === 401) { emit('session-expired'); return; }
@@ -108,6 +113,9 @@ function agentFail(cause: unknown) {
     AGENT_LEASE_EXPIRED: 'Сеанс агента истёк. Отправьте задачу ещё раз.',
     AGENT_STAGE_INVALID: 'Агент прислал этап в неверном порядке. Обновите карточку.',
     PROJECT_REQUIRED: 'Укажите проект задачи перед отправкой агенту.',
+    TASK_ARCHIVED: 'Задача находится в архиве. Восстановите её, чтобы продолжить диалог.',
+    TASK_NOT_FOUND: 'Задача удалена. Обновите список задач.',
+    INVALID_REQUEST: 'Проверьте текст сообщения.',
     VERSION_CONFLICT: 'Задача изменилась. Сначала загрузите актуальную версию.',
     TEAM_NOT_FOUND: 'Доступ к команде закрыт.',
     TOO_MANY_REQUESTS: 'Слишком много запросов. Подождите минуту.',
@@ -121,7 +129,9 @@ function ensureAgentPolling() {
   if (!agentActive.value) { stopAgentPolling(); return; }
   if (agentTimer !== undefined) return;
   agentTimer = window.setInterval(() => {
-    if (editing.value) void loadAgentRuns(editing.value.id, true);
+    if (!editing.value) return;
+    void loadAgentRuns(editing.value.id, true);
+    void loadAgentMessages(editing.value.id, true);
   }, 4000);
 }
 async function loadAgentRuns(taskId: string, polling = false) {
@@ -137,6 +147,19 @@ async function loadAgentRuns(taskId: string, polling = false) {
     else stopAgentPolling();
   } finally {
     if (polling) agentPollBusy.value = false;
+  }
+}
+async function loadAgentMessages(taskId: string, polling = false) {
+  if (polling && agentMessagesPollBusy.value) return;
+  if (polling) agentMessagesPollBusy.value = true;
+  try {
+    const result = await api<{ messages: AgentMessageItem[] }>(`${base}/${taskId}/agent-messages`);
+    if (!editing.value || editing.value.id !== taskId) return;
+    agentMessages.value = result.messages;
+  } catch (cause) {
+    if (!polling) agentFail(cause);
+  } finally {
+    if (polling) agentMessagesPollBusy.value = false;
   }
 }
 function formattedDate(value: string) {
@@ -169,13 +192,16 @@ async function refreshMembers() {
 function open(task: TaskItem | null) {
   stopAgentPolling();
   editing.value = task; latest.value = null; conflicted.value = false; deleting.value = false;
-  agentRuns.value = []; agentError.value = ''; agentNotice.value = ''; cancelingRunId.value = '';
+  agentRuns.value = []; agentMessages.value = []; agentMessageText.value = ''; agentError.value = ''; agentNotice.value = ''; cancelingRunId.value = '';
   title.value = task?.title ?? ''; description.value = task?.description ?? '';
   status.value = task?.status ?? 'TODO';
   project.value = task?.project ?? (task ? '' : 'TG_BUDGET');
   assigneeId.value = task?.assigneeId ?? '';
   error.value = ''; notice.value = ''; sheet.value?.showModal();
-  if (task) void loadAgentRuns(task.id);
+  if (task) {
+    void loadAgentRuns(task.id);
+    void loadAgentMessages(task.id);
+  }
   void refreshMembers();
 }
 async function fetchLatest() {
@@ -212,9 +238,11 @@ async function save(remove = false) {
 }
 async function sendToAgent() {
   const task = editing.value;
-  if (!task || busy.value || agentBusy.value || agentActive.value || conflicted.value) return;
+  if (!task || busy.value || agentBusy.value || agentChatBusy.value || agentActive.value || conflicted.value) return;
+  if (task.archivedAt) { agentError.value = 'Задача находится в архиве. Восстановите её, чтобы продолжить диалог.'; return; }
   if (!task.project) { agentError.value = 'Укажите и сохраните проект задачи, чтобы отправить её агенту.'; return; }
   if (hasChanges.value) { agentError.value = 'Сначала сохраните изменения задачи, чтобы отправить её агенту.'; return; }
+  if (agentMessageText.value.trim()) { await sendAgentMessage(); return; }
   agentBusy.value = true; agentError.value = ''; agentNotice.value = '';
   try {
     const result = await api<{ run: AgentRunItem; task: TaskItem }>(`${base}/${task.id}/agent-runs`, { version: task.version });
@@ -230,6 +258,29 @@ async function sendToAgent() {
     agentFail(cause);
   } finally {
     agentBusy.value = false;
+  }
+}
+async function sendAgentMessage() {
+  const task = editing.value;
+  const body = agentMessageText.value.trim();
+  if (!task || !body || agentChatDisabled.value) return;
+  agentChatBusy.value = true; agentError.value = ''; agentNotice.value = '';
+  try {
+    const result = await api<{ message: AgentMessageItem; run: AgentRunItem; task: TaskItem }>(`${base}/${task.id}/agent-messages`, { body });
+    editing.value = result.task;
+    title.value = result.task.title; description.value = result.task.description;
+    status.value = result.task.status; project.value = result.task.project ?? '';
+    assigneeId.value = result.task.assigneeId ?? '';
+    agentMessages.value = [...agentMessages.value.filter(message => message.id !== result.message.id), result.message];
+    agentRuns.value = [result.run, ...agentRuns.value.filter(run => run.id !== result.run.id)];
+    agentMessageText.value = '';
+    agentNotice.value = 'Сообщение отправлено агенту. Дождитесь ответа.';
+    ensureAgentPolling();
+    void load();
+  } catch (cause) {
+    agentFail(cause);
+  } finally {
+    agentChatBusy.value = false;
   }
 }
 async function cancelAgentRun(run: AgentRunItem) {
@@ -608,7 +659,7 @@ defineExpose({ refresh: () => {
               >{{ agentStatusLabels[latestAgentRun.status] }}</span>
             </div>
             <p class="muted">
-              Агент оценит задачу, составит план, внесёт изменения в ветке проекта «{{ projectLabel(editing.project) }}» и откроет pull request. Автоматического слияния нет.
+              Агент оценит задачу, составит план, внесёт изменения в ветке проекта «{{ projectLabel(editing.project) }}» и откроет pull request. Автоматического слияния и деплоя нет.
             </p>
             <p
               v-if="agentError"
@@ -625,7 +676,13 @@ defineExpose({ refresh: () => {
               {{ agentNotice }}
             </p>
             <p
-              v-if="!editing.project"
+              v-if="editing.archivedAt"
+              class="muted"
+            >
+              Задача находится в архиве. Восстановите её, чтобы продолжить диалог с агентом.
+            </p>
+            <p
+              v-else-if="!editing.project"
               class="muted"
             >
               Укажите проект задачи и сохраните изменения, чтобы отправить её агенту.
@@ -636,10 +693,69 @@ defineExpose({ refresh: () => {
             >
               Сначала сохраните изменения задачи, чтобы отправить её агенту.
             </p>
+            <p
+              v-else-if="latestAgentRun?.status === 'NEEDS_INPUT'"
+              class="muted"
+            >
+              Агент ждёт ответа. Напишите его в диалоге ниже.
+            </p>
+            <section
+              class="agent-chat"
+              aria-labelledby="agent-chat-title"
+            >
+              <h4 id="agent-chat-title">
+                Диалог
+              </h4>
+              <div
+                v-if="agentMessages.length"
+                class="agent-chat-messages"
+                role="log"
+                aria-live="polite"
+              >
+                <article
+                  v-for="message in agentMessages"
+                  :key="message.id"
+                  class="agent-message"
+                  :class="message.role.toLowerCase()"
+                >
+                  <div class="agent-message-meta">
+                    <strong>{{ message.role === 'USER' ? 'Вы' : 'Агент' }}</strong>
+                    <small class="muted">{{ formattedDate(message.createdAt) }}</small>
+                  </div>
+                  <p>{{ message.body }}</p>
+                </article>
+              </div>
+              <p
+                v-else
+                class="muted"
+              >
+                Напишите агенту уточнение или ответ на его вопрос.
+              </p>
+              <label
+                for="agent-chat-input"
+                class="muted"
+              >Сообщение агенту</label>
+              <textarea
+                id="agent-chat-input"
+                v-model="agentMessageText"
+                rows="3"
+                maxlength="4000"
+                :disabled="agentChatDisabled"
+                :placeholder="latestAgentRun?.status === 'NEEDS_INPUT' ? 'Ответьте на вопрос агента…' : 'Уточните задачу или попросите внести изменения…'"
+              />
+              <button
+                type="button"
+                class="full-width"
+                :disabled="agentChatDisabled || !agentMessageText.trim()"
+                @click="sendAgentMessage"
+              >
+                {{ agentChatBusy ? 'Отправляем…' : agentActive ? 'Агент работает…' : latestAgentRun?.status === 'NEEDS_INPUT' ? 'Ответить агенту' : 'Отправить сообщение' }}
+              </button>
+            </section>
             <button
               type="button"
               class="secondary full-width agent-send"
-              :disabled="agentBusy || busy || agentActive || conflicted || hasChanges || !editing.project"
+              :disabled="agentBusy || busy || agentActive || conflicted || hasChanges || !editing.project || !!editing.archivedAt"
               @click="sendToAgent"
             >
               {{ agentBusy ? 'Отправляем…' : agentActive ? (latestAgentRun?.status === 'REVIEW' ? 'Pull request на проверке' : 'Агент работает…') : latestAgentRun ? 'Отправить агенту снова' : 'Отправить агенту' }}

@@ -6,7 +6,7 @@ import { createTeamService } from '../src/teams/service.js';
 import { createWorkService } from '../src/work/service.js';
 import { buildApp } from '../src/app.js';
 import { AuthError } from '../src/auth/telegram.js';
-import type { AgentRunClaim, AgentRunItem, CurrentUser, TaskItem } from '@task-tg/shared';
+import type { AgentMessageItem, AgentRunClaim, AgentRunItem, CurrentUser, TaskItem } from '@task-tg/shared';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString || new URL(connectionString).pathname !== '/task_tg_agent_test') throw new Error('Requires disposable task_tg_agent_test database');
@@ -41,8 +41,12 @@ try {
   await teams.join(member.id, (await teams.createInvite(teamId, owner.id)).token);
   let task = await work.createTask(teamId, owner.id, { title: 'Agent task', description: 'Implement it', status: 'TODO', project: 'TASK_TG', assigneeId: null });
   const base = `/api/teams/${teamId}/tasks/${task.id}/agent-runs`;
+  const messageBase = `/api/teams/${teamId}/tasks/${task.id}/agent-messages`;
 
   assert.equal((await app.inject(base)).statusCode, 401);
+  assert.equal((await app.inject(messageBase)).statusCode, 401);
+  assert.equal((await request(outsider, 'GET', messageBase)).statusCode, 404);
+  assert.deepEqual((await request(owner, 'GET', messageBase)).json().messages, []);
   assert.equal((await app.inject({ method: 'POST', url: base, headers: { origin: 'https://evil.example', cookie: `tasktg_dev=${[...tokens][0]?.[0]}` }, payload: { version: task.version } })).statusCode, 403);
   assert.equal((await request(outsider, 'GET', base)).statusCode, 404);
 
@@ -84,6 +88,10 @@ try {
   assert.equal((await worker(`/api/agent/runs/${run.id}/complete`, { leaseToken: claim.leaseToken, status: 'DONE' })).statusCode, 404);
   assert.equal((await request(owner, 'GET', base)).json().runs[0].status, 'DONE');
   assert.equal((await request(owner, 'POST', `${base}/${run.id}/cancel`, {})).statusCode, 409);
+  const completedMessages = (await request(member, 'GET', messageBase)).json().messages as AgentMessageItem[];
+  assert.equal(completedMessages.length, 1);
+  assert.equal(completedMessages[0]?.role, 'AGENT');
+  assert.equal(completedMessages[0]?.body, 'Готово');
 
   const second = await request(owner, 'POST', base, { version: completedTask.version });
   assert.equal(second.statusCode, 201);
@@ -112,6 +120,43 @@ try {
   assert.equal(expired.status, 'FAILED');
   assert.equal(expired.error, 'LEASE_EXPIRED');
 
+  const chatCreated = await request(member, 'POST', messageBase, { body: 'Нужно уточнить детали' });
+  assert.equal(chatCreated.statusCode, 201);
+  const chatMessage = chatCreated.json().message as AgentMessageItem;
+  const chatRun = chatCreated.json().run as AgentRunItem;
+  assert.equal(chatMessage.role, 'USER');
+  assert.equal(chatMessage.authorId, member.id);
+  assert.equal(chatRun.status, 'QUEUED');
+  const messageCount = (await request(owner, 'GET', messageBase)).json().messages.length as number;
+  assert.equal((await request(owner, 'POST', messageBase, { body: 'Ещё одно сообщение' })).statusCode, 409);
+  assert.equal((await request(owner, 'GET', messageBase)).json().messages.length, messageCount);
+  const chatClaimResponse = await worker('/api/agent/runs/claim', { workerId: 'integration-worker' });
+  assert.equal(chatClaimResponse.statusCode, 200);
+  const chatClaim = chatClaimResponse.json().run as AgentRunClaim;
+  assert.equal(chatClaim.id, chatRun.id);
+  assert.match(chatClaim.context ?? '', /Пользователь: Нужно уточнить детали/);
+  assert.equal((await app.inject({
+    method: 'POST', url: `/api/agent/runs/${chatRun.id}/events`,
+    payload: { leaseToken: chatClaim.leaseToken, stage: 'NEEDS_INPUT', message: 'Какой вариант выбрать?' },
+  })).statusCode, 200);
+  const questionMessages = (await request(owner, 'GET', messageBase)).json().messages as AgentMessageItem[];
+  assert.ok(questionMessages.some((message) => message.role === 'AGENT' && message.body === 'Какой вариант выбрать?'));
+
+  const reply = await request(owner, 'POST', messageBase, { body: 'Вариант A' });
+  assert.equal(reply.statusCode, 201);
+  const replyRun = reply.json().run as AgentRunItem;
+  const replyClaimResponse = await worker('/api/agent/runs/claim', { workerId: 'integration-worker' });
+  assert.equal(replyClaimResponse.statusCode, 200);
+  const replyClaim = replyClaimResponse.json().run as AgentRunClaim;
+  assert.equal(replyClaim.id, replyRun.id);
+  assert.match(replyClaim.context ?? '', /Агент: Какой вариант выбрать\?/);
+  assert.match(replyClaim.context ?? '', /Пользователь: Вариант A/);
+  assert.equal((await worker(`/api/agent/runs/${replyRun.id}/complete`, {
+    leaseToken: replyClaim.leaseToken, status: 'DONE', summary: 'Ответ принят',
+  })).statusCode, 200);
+  const answeredMessages = (await request(owner, 'GET', messageBase)).json().messages as AgentMessageItem[];
+  assert.ok(answeredMessages.some((message) => message.role === 'AGENT' && message.body === 'Ответ принят'));
+
   const legacyTask = await db.task.create({ data: { teamId, creatorId: owner.id, title: 'Legacy task without project' } });
   const legacyBase = `/api/teams/${teamId}/tasks/${legacyTask.id}/agent-runs`;
   const legacyRun = await request(owner, 'POST', legacyBase, { version: legacyTask.version });
@@ -125,8 +170,9 @@ try {
   await work.removeTask(teamId, owner.id, task.id, latest.version);
   assert.equal(await db.agentRun.count({ where: { taskId: task.id } }), 0);
   assert.equal(await db.agentEvent.count({ where: { runId: thirdRun.id } }), 0);
+  assert.equal(await db.agentMessage.count({ where: { taskId: task.id } }), 0);
 
-  console.log('PASS: agent run creation, membership isolation, claim lease, heartbeat, stages, completion, cancel, expiry and task cascade');
+  console.log('PASS: agent run creation, chat messages, membership isolation, claim lease, heartbeat, stages, completion, needs-input reply, cancel, expiry and task cascade');
 } finally {
   if (teamId) await db.team.deleteMany({ where: { id: teamId } });
   await db.user.deleteMany({ where: { id: { in: actors.map((actor) => actor.id) } } });

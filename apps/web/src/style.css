@@ -91,6 +91,16 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .agent-status.failed, .agent-status.cancelled { color: var(--tg-theme-destructive-text-color, #f2aaaa); }
 .agent-status.needs_input { color: #f0c674; }
 .agent-send { margin-top: 16px; }
+.agent-chat { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--tg-theme-section-separator-color, #53627c); }
+.agent-chat h4 { margin: 0 0 8px; }
+.agent-chat-messages { display: grid; gap: 10px; max-height: 320px; overflow-y: auto; margin: 12px 0; padding: 4px 4px 4px 0; }
+.agent-message { padding: 10px 12px; border: 1px solid var(--tg-theme-section-separator-color, #53627c); border-radius: 14px; background: var(--tg-theme-bg-color, #101827); }
+.agent-message.user { border-color: var(--tg-theme-link-color, #9cb6ff); }
+.agent-message.agent { background: var(--tg-theme-secondary-bg-color, #19243a); }
+.agent-message-meta { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.agent-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.agent-chat label { margin-top: 12px; }
+.agent-chat .full-width { margin-top: 8px; }
 .agent-run-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-top: 20px; }
 .agent-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-timeline { list-style: none; display: grid; gap: 12px; max-height: 320px; overflow-y: auto; margin: 16px 0 0; padding: 0 4px 0 0; }

@@ -19,6 +19,7 @@ const lease = z.string().min(20).max(256);
 const worker = z.object({ workerId: z.string().trim().min(1).max(120) }).strict();
 const heartbeatBody = z.object({ leaseToken: lease }).strict();
 const reportBody = z.object({ leaseToken: lease, stage: stage.optional(), message }).strict();
+const chatMessageBody = z.object({ body: message }).strict();
 const completeBody = z.object({
   leaseToken: lease,
   status: z.enum(['DONE', 'FAILED', 'NEEDS_INPUT']),
@@ -60,6 +61,18 @@ export function registerAgentRoutes(app: FastifyInstance, agent: AgentService, w
     const p = parse(teamTask, request.params);
     const body = parse(z.object({ version }).strict(), request.body);
     return reply.code(201).send(await agent.createRun(p.id, p.teamId, actor(request), body.version));
+  });
+
+  app.get('/api/teams/:teamId/tasks/:id/agent-messages', async (request) => {
+    const p = parse(teamTask, request.params);
+    return agent.listMessages(p.id, p.teamId, actor(request));
+  });
+
+  app.post('/api/teams/:teamId/tasks/:id/agent-messages', async (request, reply) => {
+    if (!workerToken) throw new HttpError(503, 'AGENT_NOT_CONFIGURED');
+    const p = parse(teamTask, request.params);
+    const body = parse(chatMessageBody, request.body);
+    return reply.code(201).send(await agent.sendMessage(p.id, p.teamId, actor(request), body.body));
   });
 
   app.post('/api/teams/:teamId/tasks/:id/agent-runs/:runId/cancel', async (request) => {

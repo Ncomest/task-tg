@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import type { AgentEventItem, AgentRunClaim, AgentRunItem, AgentRunStage, AgentRunStatus, TaskItem, TaskStatus } from '@task-tg/shared';
-import type { AgentEvent, AgentRun, Prisma, PrismaClient, Task } from '../generated/prisma/client.js';
+import type { AgentEventItem, AgentMessageItem, AgentRunClaim, AgentRunItem, AgentRunStage, AgentRunStatus, TaskItem, TaskStatus } from '@task-tg/shared';
+import type { AgentEvent, AgentMessage, AgentRun, Prisma, PrismaClient, Task } from '../generated/prisma/client.js';
 import { HttpError } from '../errors.js';
 import { lockTeam, withTeamMember } from '../teams/access.js';
 
@@ -9,6 +9,9 @@ const ACTIVE_STATUSES: AgentRunStatus[] = ['QUEUED', 'ASSESSING', 'PLANNED', 'WO
 const TERMINAL_STATUSES: AgentRunStatus[] = ['DONE', 'FAILED', 'CANCELLED', 'NEEDS_INPUT'];
 const EVENT_STAGES: AgentRunStage[] = ['ASSESSING', 'PLANNED', 'WORKING', 'REVIEW', 'NEEDS_INPUT'];
 const STAGE_RANK: Partial<Record<AgentRunStatus, number>> = { ASSESSING: 0, PLANNED: 1, WORKING: 2, REVIEW: 3 };
+const CONTEXT_MESSAGE_LIMIT = 20;
+const CONTEXT_CHAR_LIMIT = 12000;
+const CONTEXT_MESSAGE_CHAR_LIMIT = 4000;
 
 type AgentRunWithEvents = AgentRun & { events: AgentEvent[] };
 type CompleteStatus = Extract<AgentRunStatus, 'DONE' | 'FAILED' | 'NEEDS_INPUT'>;
@@ -24,6 +27,16 @@ interface CompleteInput {
 
 const taskItem = (task: Task): TaskItem => ({ ...task, archivedAt: task.archivedAt?.toISOString() ?? null, completedAt: task.completedAt?.toISOString() ?? null, createdAt: task.createdAt.toISOString(), updatedAt: task.updatedAt.toISOString() });
 const eventItem = (event: AgentEvent): AgentEventItem => ({ ...event, createdAt: event.createdAt.toISOString() });
+const messageItem = (message: AgentMessage): AgentMessageItem => ({
+  id: message.id,
+  taskId: message.taskId,
+  teamId: message.teamId,
+  runId: message.runId,
+  authorId: message.authorId,
+  role: message.role,
+  body: message.body,
+  createdAt: message.createdAt.toISOString(),
+});
 const runItem = (run: AgentRunWithEvents): AgentRunItem => ({
   id: run.id,
   taskId: run.taskId,
@@ -111,6 +124,61 @@ export function createAgentService(db: PrismaClient) {
     return task;
   }
 
+  async function conversationContext(tx: Prisma.TransactionClient, taskId: string, teamId: string) {
+    const messages = await tx.agentMessage.findMany({
+      where: { taskId, teamId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: CONTEXT_MESSAGE_LIMIT,
+    });
+    const blocks: string[] = [];
+    let size = 0;
+    for (const message of messages) {
+      const text = message.body.length > CONTEXT_MESSAGE_CHAR_LIMIT
+        ? `${message.body.slice(0, CONTEXT_MESSAGE_CHAR_LIMIT)}…`
+        : message.body;
+      const block = `${message.role === 'USER' ? 'Пользователь' : 'Агент'}: ${text}`;
+      if (size + block.length > CONTEXT_CHAR_LIMIT && blocks.length) break;
+      blocks.push(block);
+      size += block.length + 2;
+    }
+    return blocks.reverse().join('\n\n') || null;
+  }
+
+  async function appendAgentMessage(tx: Prisma.TransactionClient, run: Pick<AgentRun, 'id' | 'taskId' | 'teamId'>, body: string | null | undefined) {
+    const text = body?.trim();
+    if (!text) return;
+    const existing = await tx.agentMessage.findFirst({ where: { runId: run.id, role: 'AGENT' }, select: { id: true } });
+    if (existing) return;
+    await tx.agentMessage.create({
+      data: { taskId: run.taskId, teamId: run.teamId, runId: run.id, role: 'AGENT', body: text },
+    });
+  }
+
+  async function createRunTx(tx: Prisma.TransactionClient, task: Task, userId: string, version?: number) {
+    if (version !== undefined && task.version !== version) throw new HttpError(409, 'VERSION_CONFLICT');
+    if (task.archivedAt) throw new HttpError(409, 'TASK_ARCHIVED');
+    if (!task.project) throw new HttpError(409, 'PROJECT_REQUIRED');
+    const active = await tx.agentRun.findFirst({ where: { taskId: task.id, status: { in: ACTIVE_STATUSES } }, select: { id: true } });
+    if (active) throw new HttpError(409, 'AGENT_RUN_ACTIVE');
+    const updatedTask = task.status === 'IN_PROGRESS' ? task : await tx.task.update({ where: { id: task.id }, data: { status: 'IN_PROGRESS', completedAt: null, version: { increment: 1 } } });
+    const context = await conversationContext(tx, task.id, task.teamId);
+    const run = await tx.agentRun.create({
+      data: {
+        taskId: task.id,
+        teamId: task.teamId,
+        createdById: userId,
+        taskVersion: updatedTask.version,
+        taskTitle: updatedTask.title,
+        taskDescription: updatedTask.description,
+        project: updatedTask.project,
+        context,
+        events: { create: { stage: 'QUEUED', message: 'Задача поставлена в очередь агенту.' } },
+      },
+      include: { events: { orderBy: { createdAt: 'asc' } } },
+    });
+    return { run: runItem(run), task: taskItem(updatedTask) };
+  }
+
   return {
     listRuns(taskId: string, teamId: string, userId: string) {
       return withTeamMember(db, teamId, userId, async (tx) => {
@@ -128,26 +196,34 @@ export function createAgentService(db: PrismaClient) {
     createRun(taskId: string, teamId: string, userId: string, version: number) {
       return withTeamMember(db, teamId, userId, async (tx) => {
         const task = await findTask(tx, teamId, taskId);
-        if (task.version !== version) throw new HttpError(409, 'VERSION_CONFLICT');
+        return createRunTx(tx, task, userId, version);
+      });
+    },
+
+    listMessages(taskId: string, teamId: string, userId: string) {
+      return withTeamMember(db, teamId, userId, async (tx) => {
+        await findTask(tx, teamId, taskId);
+        const messages = await tx.agentMessage.findMany({
+          where: { taskId, teamId },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 100,
+        });
+        return { messages: messages.reverse().map(messageItem) };
+      });
+    },
+
+    sendMessage(taskId: string, teamId: string, userId: string, body: string) {
+      return withTeamMember(db, teamId, userId, async (tx) => {
+        const task = await findTask(tx, teamId, taskId);
         if (task.archivedAt) throw new HttpError(409, 'TASK_ARCHIVED');
         if (!task.project) throw new HttpError(409, 'PROJECT_REQUIRED');
         const active = await tx.agentRun.findFirst({ where: { taskId, status: { in: ACTIVE_STATUSES } }, select: { id: true } });
         if (active) throw new HttpError(409, 'AGENT_RUN_ACTIVE');
-        const updatedTask = task.status === 'IN_PROGRESS' ? task : await tx.task.update({ where: { id: task.id }, data: { status: 'IN_PROGRESS', completedAt: null, version: { increment: 1 } } });
-        const run = await tx.agentRun.create({
-          data: {
-            taskId,
-            teamId,
-            createdById: userId,
-            taskVersion: updatedTask.version,
-            taskTitle: updatedTask.title,
-            taskDescription: updatedTask.description,
-            project: updatedTask.project,
-            events: { create: { stage: 'QUEUED', message: 'Задача поставлена в очередь агенту.' } },
-          },
-          include: { events: { orderBy: { createdAt: 'asc' } } },
+        const message = await tx.agentMessage.create({
+          data: { taskId, teamId, authorId: userId, role: 'USER', body },
         });
-        return { run: runItem(run), task: taskItem(updatedTask) };
+        const result = await createRunTx(tx, task, userId);
+        return { message: messageItem(message), ...result };
       });
     },
 
@@ -194,7 +270,7 @@ export function createAgentService(db: PrismaClient) {
           },
           include: { events: { orderBy: { createdAt: 'asc' } } },
         });
-        return { ...runItem(run), leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString() };
+        return { ...runItem(run), leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(), context: run.context };
       }, { maxWait: 5000, timeout: 10000 });
     },
 
@@ -236,6 +312,7 @@ export function createAgentService(db: PrismaClient) {
           },
           include: { events: { orderBy: { createdAt: 'asc' } } },
         });
+        if (terminal) await appendAgentMessage(tx, run, message);
         return { status: updated.status };
       }, { maxWait: 5000, timeout: 10000 });
     },
@@ -277,6 +354,11 @@ export function createAgentService(db: PrismaClient) {
           },
           include: { events: { orderBy: { createdAt: 'asc' } } },
         });
+        await appendAgentMessage(
+          tx,
+          run,
+          input.status === 'FAILED' ? (input.error ?? input.summary) : (input.summary ?? input.error),
+        );
         return { run: runItem(updated), task: changedTask ? taskItem(changedTask) : null };
       }, { maxWait: 5000, timeout: 10000 });
     },
